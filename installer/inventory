@@ -1,4 +1,4 @@
-localhost ansible_connection=local ansible_python_interpreter="/usr/bin/env python"
+localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3
 
 [all:vars]
 
@@ -129,7 +129,7 @@ secret_key=awxsecret
 # Build AWX with official logos
 # Requires cloning awx-logos repo as a sibling of this project.
 # Review the trademark guidelines at https://github.com/ansible/awx-logos/blob/master/TRADEMARKS.md
-# awx_official=false
+awx_official=true
 
 # Proxy
 #http_proxy=http://proxy:3128
@@ -138,9 +138,9 @@ secret_key=awxsecret
 
 # Container networking configuration
 # Set the awx_task and awx_web containers' search domain(s)
-#awx_container_search_domains=example.com,ansible.com
+# awx_container_search_domains=aotosystems.com
 # Alternate DNS servers
-#awx_alternate_dns_servers="10.1.2.3,10.2.3.4"
+awx_alternate_dns_servers="10.0.0.23"
 
 # AWX project data folder. If you need access to the location where AWX stores the projects
 # it manages from the docker host, you can set this to turn it into a volume for the container.
