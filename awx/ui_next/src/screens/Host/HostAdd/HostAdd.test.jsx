@@ -1,61 +1,80 @@
 import React from 'react';
+import { act } from 'react-dom/test-utils';
 import { createMemoryHistory } from 'history';
-import { mountWithContexts, waitForElement } from '@testUtils/enzymeHelpers';
+import { mountWithContexts } from '../../../../testUtils/enzymeHelpers';
 import HostAdd from './HostAdd';
-import { HostsAPI } from '@api';
+import { HostsAPI } from '../../../api';
 
-jest.mock('@api');
+jest.mock('../../../api');
+
+const hostData = {
+  name: 'new name',
+  description: 'new description',
+  inventory: 1,
+  variables: '---\nfoo: bar',
+};
+
+HostsAPI.create.mockResolvedValue({
+  data: {
+    ...hostData,
+    id: 5,
+  },
+});
 
 describe('<HostAdd />', () => {
-  test('handleSubmit should post to api', () => {
-    const wrapper = mountWithContexts(<HostAdd />);
-    const updatedHostData = {
-      name: 'new name',
-      description: 'new description',
-      inventory: 1,
-      variables: '---\nfoo: bar',
-    };
-    wrapper.find('HostForm').prop('handleSubmit')(updatedHostData);
-    expect(HostsAPI.create).toHaveBeenCalledWith(updatedHostData);
+  let wrapper;
+  let history;
+
+  beforeEach(async () => {
+    history = createMemoryHistory({
+      initialEntries: ['/templates/job_templates/1/survey/edit/foo'],
+      state: { some: 'state' },
+    });
+    await act(async () => {
+      wrapper = mountWithContexts(<HostAdd />, {
+        context: { router: { history } },
+      });
+    });
   });
 
-  test('should navigate to hosts list when cancel is clicked', () => {
-    const history = createMemoryHistory({});
-    const wrapper = mountWithContexts(<HostAdd />, {
-      context: { router: { history } },
-    });
-    wrapper.find('button[aria-label="Cancel"]').prop('onClick')();
-    expect(history.location.pathname).toEqual('/hosts');
+  afterEach(() => {
+    jest.clearAllMocks();
+    wrapper.unmount();
   });
 
-  test('should navigate to hosts list when close (x) is clicked', () => {
-    const history = createMemoryHistory({});
-    const wrapper = mountWithContexts(<HostAdd />, {
-      context: { router: { history } },
+  test('handleSubmit should post to api', async () => {
+    await act(async () => {
+      wrapper.find('HostForm').prop('handleSubmit')(hostData);
     });
-    wrapper.find('button[aria-label="Close"]').prop('onClick')();
+    expect(HostsAPI.create).toHaveBeenCalledWith(hostData);
+  });
+
+  test('should navigate to hosts list when cancel is clicked', async () => {
+    await act(async () => {
+      wrapper.find('button[aria-label="Cancel"]').prop('onClick')();
+    });
     expect(history.location.pathname).toEqual('/hosts');
   });
 
   test('successful form submission should trigger redirect', async () => {
-    const history = createMemoryHistory({});
-    const hostData = {
-      name: 'new name',
-      description: 'new description',
-      inventory: 1,
-      variables: '---\nfoo: bar',
-    };
-    HostsAPI.create.mockResolvedValueOnce({
-      data: {
-        id: 5,
-        ...hostData,
+    await act(async () => {
+      wrapper.find('HostForm').invoke('handleSubmit')(hostData);
+    });
+    expect(wrapper.find('FormSubmitError').length).toBe(0);
+    expect(history.location.pathname).toEqual('/hosts/5/details');
+  });
+
+  test('failed form submission should show an error message', async () => {
+    const error = {
+      response: {
+        data: { detail: 'An error occurred' },
       },
+    };
+    HostsAPI.create.mockImplementationOnce(() => Promise.reject(error));
+    await act(async () => {
+      wrapper.find('HostForm').invoke('handleSubmit')(hostData);
     });
-    const wrapper = mountWithContexts(<HostAdd />, {
-      context: { router: { history } },
-    });
-    await waitForElement(wrapper, 'button[aria-label="Save"]');
-    await wrapper.find('HostForm').prop('handleSubmit')(hostData);
-    expect(history.location.pathname).toEqual('/hosts/5');
+    wrapper.update();
+    expect(wrapper.find('FormSubmitError').length).toBe(1);
   });
 });

@@ -47,7 +47,8 @@ from ansible.module_utils.basic import AnsibleModule, missing_required_lib
 
 
 def tower_auth_config(module):
-    '''tower_auth_config attempts to load the tower-cli.cfg file
+    '''
+    `tower_auth_config` attempts to load the tower-cli.cfg file
     specified from the `tower_config_file` parameter. If found,
     if returns the contents of the file as a dictionary, else
     it will attempt to fetch values from the module params and
@@ -60,7 +61,7 @@ def tower_auth_config(module):
         if os.path.isdir(config_file):
             module.fail_json(msg='directory can not be used as config file: %s' % config_file)
 
-        with open(config_file, 'rb') as f:
+        with open(config_file, 'r') as f:
             return parser.string_to_dict(f.read())
     else:
         auth_config = {}

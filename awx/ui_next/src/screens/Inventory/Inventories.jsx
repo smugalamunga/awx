@@ -1,10 +1,10 @@
-import React, { Component, Fragment } from 'react';
+import React, { Component } from 'react';
 import { withI18n } from '@lingui/react';
 import { t } from '@lingui/macro';
 import { Route, withRouter, Switch } from 'react-router-dom';
 
-import { Config } from '@contexts/Config';
-import Breadcrumbs from '@components/Breadcrumbs/Breadcrumbs';
+import { Config } from '../../contexts/Config';
+import Breadcrumbs from '../../components/Breadcrumbs/Breadcrumbs';
 import { InventoryList } from './InventoryList';
 import Inventory from './Inventory';
 import SmartInventory from './SmartInventory';
@@ -19,44 +19,72 @@ class Inventories extends Component {
     this.state = {
       breadcrumbConfig: {
         '/inventories': i18n._(t`Inventories`),
-        '/inventories/inventory/add': i18n._(t`Create New Inventory`),
+        '/inventories/inventory/add': i18n._(t`Create new inventory`),
         '/inventories/smart_inventory/add': i18n._(
-          t`Create New Smart Inventory`
+          t`Create new smart inventory`
         ),
       },
     };
   }
 
-  setBreadCrumbConfig = inventory => {
+  setBreadCrumbConfig = (inventory, nested, schedule) => {
     const { i18n } = this.props;
     if (!inventory) {
       return;
     }
+
     const inventoryKind =
       inventory.kind === 'smart' ? 'smart_inventory' : 'inventory';
+
+    const inventoryPath = `/inventories/${inventoryKind}/${inventory.id}`;
+    const inventoryHostsPath = `${inventoryPath}/hosts`;
+    const inventoryGroupsPath = `${inventoryPath}/groups`;
+    const inventorySourcesPath = `${inventoryPath}/sources`;
+
     const breadcrumbConfig = {
       '/inventories': i18n._(t`Inventories`),
-      '/inventories/inventory/add': i18n._(t`Create New Inventory`),
-      '/inventories/smart_inventory/add': i18n._(t`Create New Smart Inventory`),
-      [`/inventories/${inventoryKind}/${inventory.id}`]: `${inventory.name}`,
-      [`/inventories/${inventoryKind}/${inventory.id}/details`]: i18n._(
-        t`Details`
+      '/inventories/inventory/add': i18n._(t`Create new inventory`),
+      '/inventories/smart_inventory/add': i18n._(t`Create new smart inventory`),
+
+      [inventoryPath]: `${inventory.name}`,
+      [`${inventoryPath}/access`]: i18n._(t`Access`),
+      [`${inventoryPath}/completed_jobs`]: i18n._(t`Completed jobs`),
+      [`${inventoryPath}/details`]: i18n._(t`Details`),
+      [`${inventoryPath}/edit`]: i18n._(t`Edit details`),
+
+      [inventoryHostsPath]: i18n._(t`Hosts`),
+      [`${inventoryHostsPath}/add`]: i18n._(t`Create new host`),
+      [`${inventoryHostsPath}/${nested?.id}`]: `${nested?.name}`,
+      [`${inventoryHostsPath}/${nested?.id}/edit`]: i18n._(t`Edit details`),
+      [`${inventoryHostsPath}/${nested?.id}/details`]: i18n._(t`Host Details`),
+      [`${inventoryHostsPath}/${nested?.id}/completed_jobs`]: i18n._(
+        t`Completed jobs`
       ),
-      [`/inventories/${inventoryKind}/${inventory.id}/edit`]: i18n._(
-        t`Edit Details`
+      [`${inventoryHostsPath}/${nested?.id}/facts`]: i18n._(t`Facts`),
+      [`${inventoryHostsPath}/${nested?.id}/groups`]: i18n._(t`Groups`),
+
+      [inventoryGroupsPath]: i18n._(t`Groups`),
+      [`${inventoryGroupsPath}/add`]: i18n._(t`Create new group`),
+      [`${inventoryGroupsPath}/${nested?.id}`]: `${nested?.name}`,
+      [`${inventoryGroupsPath}/${nested?.id}/edit`]: i18n._(t`Edit details`),
+      [`${inventoryGroupsPath}/${nested?.id}/details`]: i18n._(
+        t`Group details`
       ),
-      [`/inventories/${inventoryKind}/${inventory.id}/access`]: i18n._(
-        t`Access`
+      [`${inventoryGroupsPath}/${nested?.id}/nested_hosts`]: i18n._(t`Hosts`),
+      [`${inventoryGroupsPath}/${nested?.id}/nested_hosts/add`]: i18n._(
+        t`Create new host`
       ),
-      [`/inventories/${inventoryKind}/${inventory.id}/completed_jobs`]: i18n._(
-        t`Completed Jobs`
+
+      [`${inventorySourcesPath}`]: i18n._(t`Sources`),
+      [`${inventorySourcesPath}/add`]: i18n._(t`Create new source`),
+      [`${inventorySourcesPath}/${nested?.id}`]: `${nested?.name}`,
+      [`${inventorySourcesPath}/${nested?.id}/details`]: i18n._(t`Details`),
+      [`${inventorySourcesPath}/${nested?.id}/edit`]: i18n._(t`Edit details`),
+      [`${inventorySourcesPath}/${nested?.id}/schedules`]: i18n._(t`Schedules`),
+      [`${inventorySourcesPath}/${nested?.id}/schedules/${schedule?.id}`]: `${schedule?.name}`,
+      [`${inventorySourcesPath}/${nested?.id}/schedules/${schedule?.id}/details`]: i18n._(
+        t`Schedule Details`
       ),
-      [`/inventories/${inventoryKind}/${inventory.id}/hosts`]: i18n._(t`Hosts`),
-      [`/inventories/${inventoryKind}/${inventory.id}/hosts/add`]: i18n._(
-        t`Create New Host`
-      ),
-      [`/inventories/inventory/${inventory.id}/sources`]: i18n._(t`Sources`),
-      [`/inventories/inventory/${inventory.id}/groups`]: i18n._(t`Groups`),
     };
     this.setState({ breadcrumbConfig });
   };
@@ -65,33 +93,25 @@ class Inventories extends Component {
     const { match, history, location } = this.props;
     const { breadcrumbConfig } = this.state;
     return (
-      <Fragment>
+      <>
         <Breadcrumbs breadcrumbConfig={breadcrumbConfig} />
         <Switch>
-          <Route
-            path={`${match.path}/inventory/add`}
-            render={() => <InventoryAdd />}
-          />
-          <Route
-            path={`${match.path}/smart_inventory/add`}
-            render={() => <SmartInventoryAdd />}
-          />
-          <Route
-            path={`${match.path}/inventory/:id`}
-            render={({ match: newRouteMatch }) => (
-              <Config>
-                {({ me }) => (
-                  <Inventory
-                    history={history}
-                    location={location}
-                    setBreadcrumb={this.setBreadCrumbConfig}
-                    me={me || {}}
-                    match={newRouteMatch}
-                  />
-                )}
-              </Config>
-            )}
-          />
+          <Route path={`${match.path}/inventory/add`}>
+            <InventoryAdd />
+          </Route>
+          <Route path={`${match.path}/smart_inventory/add`}>
+            <SmartInventoryAdd />
+          </Route>
+          <Route path={`${match.path}/inventory/:id`}>
+            <Config>
+              {({ me }) => (
+                <Inventory
+                  setBreadcrumb={this.setBreadCrumbConfig}
+                  me={me || {}}
+                />
+              )}
+            </Config>
+          </Route>
           <Route
             path={`${match.path}/smart_inventory/:id`}
             render={({ match: newRouteMatch }) => (
@@ -108,9 +128,11 @@ class Inventories extends Component {
               </Config>
             )}
           />
-          <Route path={`${match.path}`} render={() => <InventoryList />} />
+          <Route path={`${match.path}`}>
+            <InventoryList />
+          </Route>
         </Switch>
-      </Fragment>
+      </>
     );
   }
 }

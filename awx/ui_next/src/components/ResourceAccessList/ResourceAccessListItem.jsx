@@ -1,22 +1,24 @@
+import 'styled-components/macro';
 import React from 'react';
 import { func } from 'prop-types';
 import { withI18n } from '@lingui/react';
 import { t } from '@lingui/macro';
 import {
+  Chip,
   DataListItem,
   DataListItemRow,
   DataListItemCells as PFDataListItemCells,
-  DataListCell,
   Text,
   TextContent,
   TextVariants,
 } from '@patternfly/react-core';
 import { Link } from 'react-router-dom';
 import styled from 'styled-components';
+import DataListCell from '../DataListCell';
 
-import { ChipGroup, Chip } from '@components/Chip';
-import { DetailList, Detail } from '@components/DetailList';
-import { AccessRecord } from '@types';
+import ChipGroup from '../ChipGroup';
+import { DetailList, Detail } from '../DetailList';
+import { AccessRecord } from '../../types';
 
 const DataListItemCells = styled(PFDataListItemCells)`
   align-items: start;
@@ -72,17 +74,21 @@ class ResourceAccessListItem extends React.Component {
     const [teamRoles, userRoles] = this.getRoleLists();
 
     return (
-      <DataListItem aria-labelledby="access-list-item" key={accessRecord.id}>
+      <DataListItem
+        aria-labelledby="access-list-item"
+        key={accessRecord.id}
+        id={`${accessRecord.id}`}
+      >
         <DataListItemRow>
           <DataListItemCells
             dataListCells={[
               <DataListCell key="name">
                 {accessRecord.username && (
                   <TextContent>
-                    {accessRecord.url ? (
+                    {accessRecord.id ? (
                       <Text component={TextVariants.h6}>
                         <Link
-                          to={{ pathname: accessRecord.url }}
+                          to={{ pathname: `/users/${accessRecord.id}/details` }}
                           css="font-weight: bold"
                         >
                           {accessRecord.username}
@@ -110,7 +116,7 @@ class ResourceAccessListItem extends React.Component {
                     <Detail
                       label={i18n._(t`User Roles`)}
                       value={
-                        <ChipGroup numChips={5}>
+                        <ChipGroup numChips={5} totalChips={userRoles.length}>
                           {userRoles.map(this.renderChip)}
                         </ChipGroup>
                       }
@@ -120,7 +126,7 @@ class ResourceAccessListItem extends React.Component {
                     <Detail
                       label={i18n._(t`Team Roles`)}
                       value={
-                        <ChipGroup numChips={5}>
+                        <ChipGroup numChips={5} totalChips={teamRoles.length}>
                           {teamRoles.map(this.renderChip)}
                         </ChipGroup>
                       }

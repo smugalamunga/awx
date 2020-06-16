@@ -1,7 +1,9 @@
 import logging
 import os
 import random
+import signal
 import sys
+import time
 import traceback
 from uuid import uuid4
 
@@ -72,9 +74,6 @@ class PoolWorker(object):
             if not body.get('uuid'):
                 body['uuid'] = str(uuid4())
             uuid = body['uuid']
-        logger.debug('delivered {} to worker[{}] qsize {}'.format(
-            uuid, self.pid, self.qsize
-        ))
         self.managed_tasks[uuid] = body
         self.queue.put(body, block=True, timeout=5)
         self.messages_sent += 1
@@ -132,7 +131,7 @@ class PoolWorker(object):
                 # when this occurs, it's _fine_ to ignore this KeyError because
                 # the purpose of self.managed_tasks is to just track internal
                 # state of which events are *currently* being processed.
-                pass
+                logger.warn('Event UUID {} appears to be have been duplicated.'.format(uuid))
 
     @property
     def current_task(self):
@@ -247,7 +246,7 @@ class WorkerPool(object):
             ' qsize={{ w.managed_tasks|length }}'
             ' rss={{ w.mb }}MB'
             '{% for task in w.managed_tasks.values() %}'
-            '\n     - {% if loop.index0 == 0 %}running {% else %}queued {% endif %}'
+            '\n     - {% if loop.index0 == 0 %}running {% if "age" in task %}for: {{ "%.1f" % task["age"] }}s {% endif %}{% else %}queued {% endif %}'
             '{{ task["uuid"] }} '
             '{% if "task" in task %}'
             '{{ task["task"].rsplit(".", 1)[-1] }}'
@@ -277,7 +276,7 @@ class WorkerPool(object):
                 logger.warn("could not write to queue %s" % preferred_queue)
                 logger.warn("detail: {}".format(tb))
             write_attempt_order.append(preferred_queue)
-        logger.warn("could not write payload to any queue, attempted order: {}".format(write_attempt_order))
+        logger.error("could not write payload to any queue, attempted order: {}".format(write_attempt_order))
         return None
 
     def stop(self, signum):
@@ -368,6 +367,26 @@ class AutoscalePool(WorkerPool):
                 logger.warn('scaling down worker pid:{}'.format(w.pid))
                 w.quit()
                 self.workers.remove(w)
+            if w.alive:
+                # if we discover a task manager invocation that's been running
+                # too long, reap it (because otherwise it'll just hold the postgres
+                # advisory lock forever); the goal of this code is to discover
+                # deadlocks or other serious issues in the task manager that cause
+                # the task manager to never do more work
+                current_task = w.current_task
+                if current_task and isinstance(current_task, dict):
+                    if current_task.get('task', '').endswith('tasks.run_task_manager'):
+                        if 'started' not in current_task:
+                            w.managed_tasks[
+                                current_task['uuid']
+                            ]['started'] = time.time()
+                        age = time.time() - current_task['started']
+                        w.managed_tasks[current_task['uuid']]['age'] = age
+                        if age > (60 * 5):
+                            logger.error(
+                                f'run_task_manager has held the advisory lock for >5m, sending SIGTERM to {w.pid}'
+                            )  # noqa
+                            os.kill(w.pid, signal.SIGTERM)
 
         for m in orphaned:
             # if all the workers are dead, spawn at least one

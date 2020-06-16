@@ -1,10 +1,12 @@
 import React, { Fragment } from 'react';
-import PropTypes, { arrayOf, shape, string, bool } from 'prop-types';
+import PropTypes from 'prop-types';
 import { withRouter } from 'react-router-dom';
 import styled from 'styled-components';
-
-import DataListToolbar from '@components/DataListToolbar';
-import FilterTags from '@components/FilterTags';
+import {
+  DataToolbar,
+  DataToolbarContent,
+} from '@patternfly/react-core/dist/umd/experimental';
+import DataListToolbar from '../DataListToolbar';
 
 import {
   encodeNonDefaultQueryString,
@@ -12,8 +14,8 @@ import {
   mergeParams,
   replaceParams,
   removeParams,
-} from '@util/qs';
-import { QSConfig } from '@types';
+} from '../../util/qs';
+import { QSConfig, SearchColumns, SortColumns } from '../../types';
 
 const EmptyStateControlsWrapper = styled.div`
   display: flex;
@@ -31,34 +33,45 @@ class ListHeader extends React.Component {
     super(props);
 
     this.handleSearch = this.handleSearch.bind(this);
+    this.handleReplaceSearch = this.handleReplaceSearch.bind(this);
     this.handleSort = this.handleSort.bind(this);
     this.handleRemove = this.handleRemove.bind(this);
     this.handleRemoveAll = this.handleRemoveAll.bind(this);
   }
 
-  getSortOrder() {
-    const { qsConfig, location } = this.props;
-    const queryParams = parseQueryString(qsConfig, location.search);
-    if (queryParams.order_by && queryParams.order_by.startsWith('-')) {
-      return [queryParams.order_by.substr(1), 'descending'];
-    }
-    return [queryParams.order_by, 'ascending'];
-  }
-
   handleSearch(key, value) {
     const { location, qsConfig } = this.props;
+    let params = parseQueryString(qsConfig, location.search);
+    params = mergeParams(params, { [key]: value });
+    params = replaceParams(params, { page: 1 });
+    this.pushHistoryState(params);
+  }
+
+  handleReplaceSearch(key, value) {
+    const { location, qsConfig } = this.props;
     const oldParams = parseQueryString(qsConfig, location.search);
-    this.pushHistoryState(mergeParams(oldParams, { [key]: value }));
+    this.pushHistoryState(replaceParams(oldParams, { [key]: value }));
   }
 
   handleRemove(key, value) {
     const { location, qsConfig } = this.props;
-    const oldParams = parseQueryString(qsConfig, location.search);
+    let oldParams = parseQueryString(qsConfig, location.search);
+    if (parseInt(value, 10)) {
+      oldParams = removeParams(qsConfig, oldParams, {
+        [key]: parseInt(value, 10),
+      });
+    }
     this.pushHistoryState(removeParams(qsConfig, oldParams, { [key]: value }));
   }
 
   handleRemoveAll() {
-    this.pushHistoryState(null);
+    // remove everything in oldParams except for page_size and order_by
+    const { location, qsConfig } = this.props;
+    const oldParams = parseQueryString(qsConfig, location.search);
+    const oldParamsClone = { ...oldParams };
+    delete oldParamsClone.page_size;
+    delete oldParamsClone.order_by;
+    this.pushHistoryState(removeParams(qsConfig, oldParams, oldParamsClone));
   }
 
   handleSort(key, order) {
@@ -83,44 +96,40 @@ class ListHeader extends React.Component {
     const {
       emptyStateControls,
       itemCount,
-      columns,
+      searchColumns,
+      sortColumns,
       renderToolbar,
       qsConfig,
       location,
     } = this.props;
-    const [orderBy, sortOrder] = this.getSortOrder();
     const params = parseQueryString(qsConfig, location.search);
     const isEmpty = itemCount === 0 && Object.keys(params).length === 0;
     return (
       <Fragment>
         {isEmpty ? (
-          <Fragment>
-            <EmptyStateControlsWrapper>
-              {emptyStateControls}
-            </EmptyStateControlsWrapper>
-            <FilterTags
-              itemCount={itemCount}
-              qsConfig={qsConfig}
-              onRemove={this.handleRemove}
-              onRemoveAll={this.handleRemoveAll}
-            />
-          </Fragment>
+          <DataToolbar
+            id={`${qsConfig.namespace}-list-toolbar`}
+            clearAllFilters={this.handleRemoveAll}
+            collapseListedFiltersBreakpoint="md"
+          >
+            <DataToolbarContent>
+              <EmptyStateControlsWrapper>
+                {emptyStateControls}
+              </EmptyStateControlsWrapper>
+            </DataToolbarContent>
+          </DataToolbar>
         ) : (
           <Fragment>
             {renderToolbar({
-              sortedColumnKey: orderBy,
-              sortOrder,
-              columns,
+              searchColumns,
+              sortColumns,
               onSearch: this.handleSearch,
+              onReplaceSearch: this.handleReplaceSearch,
               onSort: this.handleSort,
+              onRemove: this.handleRemove,
+              clearAllFilters: this.handleRemoveAll,
               qsConfig,
             })}
-            <FilterTags
-              itemCount={itemCount}
-              qsConfig={qsConfig}
-              onRemove={this.handleRemove}
-              onRemoveAll={this.handleRemoveAll}
-            />
           </Fragment>
         )}
       </Fragment>
@@ -131,14 +140,8 @@ class ListHeader extends React.Component {
 ListHeader.propTypes = {
   itemCount: PropTypes.number.isRequired,
   qsConfig: QSConfig.isRequired,
-  columns: arrayOf(
-    shape({
-      name: string.isRequired,
-      key: string.isRequired,
-      isSortable: bool,
-      isSearchable: bool,
-    })
-  ).isRequired,
+  searchColumns: SearchColumns.isRequired,
+  sortColumns: SortColumns.isRequired,
   renderToolbar: PropTypes.func,
 };
 

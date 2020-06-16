@@ -1,5 +1,6 @@
 import {
   shape,
+  exact,
   arrayOf,
   number,
   string,
@@ -41,6 +42,18 @@ export const AccessRecord = shape({
   type: string,
 });
 
+export const Application = shape({
+  id: number.isRequired,
+  name: string.isRequired,
+  organization: number,
+  summary_fields: shape({
+    organization: shape({
+      id: number.isRequired,
+      name: string.isRequired,
+    }),
+  }),
+});
+
 export const Organization = shape({
   id: number.isRequired,
   name: string.isRequired,
@@ -70,6 +83,12 @@ export const JobTemplate = shape({
   job_type: oneOf(['run', 'check']),
   playbook: string,
   project: number,
+});
+
+export const WorkFlowJobTemplate = shape({
+  name: string.isRequired,
+  description: string,
+  inventory: number,
 });
 
 export const Inventory = shape({
@@ -199,8 +218,6 @@ export const Host = shape({
   enabled: bool,
   instance_id: string,
   variables: string,
-  has_active_failures: bool,
-  has_inventory_sources: bool,
   last_job: number,
   last_job_host_summary: number,
 });
@@ -228,4 +245,94 @@ export const User = shape({
   is_system_auditor: bool,
   ldap_dn: string,
   last_login: string,
+});
+
+// stripped-down User object found in summary_fields (e.g. modified_by)
+export const SummaryFieldUser = shape({
+  id: number.isRequired,
+  username: string.isRequired,
+  first_name: string,
+  last_name: string,
+});
+
+export const Group = shape({
+  id: number.isRequired,
+  type: oneOf(['group']),
+  url: string,
+  related: shape({}),
+  summary_fields: shape({}),
+  created: string,
+  modified: string,
+  name: string.isRequired,
+  description: string,
+  inventory: number,
+  variables: string,
+});
+
+export const SearchColumns = arrayOf(
+  exact({
+    name: string.isRequired,
+    key: string.isRequired,
+    isDefault: bool,
+    isBoolean: bool,
+    booleanLabels: shape({
+      true: string.isRequired,
+      false: string.isRequired,
+    }),
+    options: arrayOf(arrayOf(string, string)),
+  })
+);
+
+export const SortColumns = arrayOf(
+  exact({
+    name: string.isRequired,
+    key: string.isRequired,
+  })
+);
+
+export const Schedule = shape({
+  rrule: string.isRequired,
+  id: number.isRequired,
+  type: string,
+  url: string,
+  related: shape({}),
+  summary_fields: shape({}),
+  created: string,
+  modified: string,
+  name: string.isRequired,
+  description: string,
+  extra_data: oneOfType([string, shape({})]),
+  inventory: number,
+  scm_branch: string,
+  job_type: string,
+  job_tags: string,
+  skip_tags: string,
+  limit: string,
+  diff_mode: bool,
+  verbosity: number,
+  unified_job_template: number,
+  enabled: bool,
+  dtstart: string,
+  dtend: string,
+  next_run: string,
+  timezone: string,
+  until: string,
+});
+
+export const SurveyQuestion = shape({
+  question_name: string,
+  question_description: string,
+  required: bool,
+  type: string,
+  variable: string,
+  min: number,
+  max: number,
+  default: string,
+  choices: string,
+});
+
+export const Survey = shape({
+  name: string,
+  description: string,
+  spec: arrayOf(SurveyQuestion),
 });

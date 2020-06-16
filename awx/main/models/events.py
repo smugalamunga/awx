@@ -1,19 +1,21 @@
+# -*- coding: utf-8 -*-
+
 import datetime
 import logging
 from collections import defaultdict
 
-from django.conf import settings
-from django.db import models, DatabaseError
+from django.db import models, DatabaseError, connection
 from django.utils.dateparse import parse_datetime
 from django.utils.text import Truncator
-from django.utils.timezone import utc
+from django.utils.timezone import utc, now
 from django.utils.translation import ugettext_lazy as _
 from django.utils.encoding import force_text
 
 from awx.api.versioning import reverse
+from awx.main import consumers
 from awx.main.fields import JSONField
 from awx.main.models.base import CreatedModifiedModel
-from awx.main.utils import ignore_inventory_computed_fields
+from awx.main.utils import ignore_inventory_computed_fields, camelcase_to_underscore
 
 analytics_logger = logging.getLogger('awx.analytics.job_events')
 
@@ -55,6 +57,51 @@ def create_host_status_counts(event_data):
     return dict(host_status_counts)
 
 
+def emit_event_detail(event):
+    cls = event.__class__
+    relation = {
+        JobEvent: 'job_id',
+        AdHocCommandEvent: 'ad_hoc_command_id',
+        ProjectUpdateEvent: 'project_update_id',
+        InventoryUpdateEvent: 'inventory_update_id',
+        SystemJobEvent: 'system_job_id',
+    }[cls]
+    url = ''
+    if isinstance(event, JobEvent):
+        url = '/api/v2/job_events/{}'.format(event.id)
+    if isinstance(event, AdHocCommandEvent):
+        url = '/api/v2/ad_hoc_command_events/{}'.format(event.id)
+    group = camelcase_to_underscore(cls.__name__) + 's'
+    timestamp = event.created.isoformat()
+    consumers.emit_channel_notification(
+        '-'.join([group, str(getattr(event, relation))]),
+        {
+            'id': event.id,
+            relation.replace('_id', ''): getattr(event, relation),
+            'created': timestamp,
+            'modified': timestamp,
+            'group_name': group,
+            'url': url,
+            'stdout': event.stdout,
+            'counter': event.counter,
+            'uuid': event.uuid,
+            'parent_uuid': getattr(event, 'parent_uuid', ''),
+            'start_line': event.start_line,
+            'end_line': event.end_line,
+            'event': event.event,
+            'event_data': getattr(event, 'event_data', {}),
+            'failed': event.failed,
+            'changed': event.changed,
+            'event_level': getattr(event, 'event_level', ''),
+            'play': getattr(event, 'play', ''),
+            'role': getattr(event, 'role', ''),
+            'task': getattr(event, 'task', ''),
+        }
+    )
+
+
+
+
 class BasePlaybookEvent(CreatedModifiedModel):
     '''
     An event/message logged from a playbook callback for each host.
@@ -63,7 +110,7 @@ class BasePlaybookEvent(CreatedModifiedModel):
     VALID_KEYS = [
         'event', 'event_data', 'playbook', 'play', 'role', 'task', 'created',
         'counter', 'uuid', 'stdout', 'parent_uuid', 'start_line', 'end_line',
-        'verbosity'
+        'host_id', 'host_name', 'verbosity',
     ]
 
     class Meta:
@@ -271,37 +318,74 @@ class BasePlaybookEvent(CreatedModifiedModel):
 
     def _update_from_event_data(self):
         # Update event model fields from event data.
-        updated_fields = set()
         event_data = self.event_data
         res = event_data.get('res', None)
         if self.event in self.FAILED_EVENTS and not event_data.get('ignore_errors', False):
             self.failed = True
-            updated_fields.add('failed')
         if isinstance(res, dict):
             if res.get('changed', False):
                 self.changed = True
-                updated_fields.add('changed')
         if self.event == 'playbook_on_stats':
             try:
                 failures_dict = event_data.get('failures', {})
                 dark_dict = event_data.get('dark', {})
                 self.failed = bool(sum(failures_dict.values()) +
                                    sum(dark_dict.values()))
-                updated_fields.add('failed')
                 changed_dict = event_data.get('changed', {})
                 self.changed = bool(sum(changed_dict.values()))
-                updated_fields.add('changed')
             except (AttributeError, TypeError):
                 pass
+
+            if isinstance(self, JobEvent):
+                hostnames = self._hostnames()
+                self._update_host_summary_from_stats(hostnames)
+                if self.job.inventory:
+                    try:
+                        self.job.inventory.update_computed_fields()
+                    except DatabaseError:
+                        logger.exception('Computed fields database error saving event {}'.format(self.pk))
+
+                # find parent links and progagate changed=T and failed=T
+                changed = self.job.job_events.filter(changed=True).exclude(parent_uuid=None).only('parent_uuid').values_list('parent_uuid', flat=True).distinct()  # noqa
+                failed = self.job.job_events.filter(failed=True).exclude(parent_uuid=None).only('parent_uuid').values_list('parent_uuid', flat=True).distinct()  # noqa
+
+                JobEvent.objects.filter(
+                    job_id=self.job_id, uuid__in=changed
+                ).update(changed=True)
+                JobEvent.objects.filter(
+                    job_id=self.job_id, uuid__in=failed
+                ).update(failed=True)
+
+                # send success/failure notifications when we've finished handling the playbook_on_stats event
+                from awx.main.tasks import handle_success_and_failure_notifications  # circular import
+
+                def _send_notifications():
+                    handle_success_and_failure_notifications.apply_async([self.job.id])
+                connection.on_commit(_send_notifications)
+
+
         for field in ('playbook', 'play', 'task', 'role'):
             value = force_text(event_data.get(field, '')).strip()
             if value != getattr(self, field):
                 setattr(self, field, value)
-                updated_fields.add(field)
-        return updated_fields
+        analytics_logger.info(
+            'Event data saved.',
+            extra=dict(python_objects=dict(job_event=self))
+        )
 
     @classmethod
     def create_from_data(cls, **kwargs):
+        #
+        # ⚠️  D-D-D-DANGER ZONE ⚠️
+        # This function is called by the callback receiver *once* for *every
+        # event* emitted by Ansible as a playbook runs.  That means that
+        # changes to this function are _very_ susceptible to introducing
+        # performance regressions (which the user will experience as "my
+        # playbook stdout takes too long to show up"), *especially* code which
+        # might invoke additional database queries per event.
+        #
+        # Proceed with caution!
+        #
         pk = None
         for key in ('job_id', 'project_update_id'):
             if key in kwargs:
@@ -323,75 +407,20 @@ class BasePlaybookEvent(CreatedModifiedModel):
         except (KeyError, ValueError):
             kwargs.pop('created', None)
 
+        host_map = kwargs.pop('host_map', {})
+
         sanitize_event_keys(kwargs, cls.VALID_KEYS)
         workflow_job_id = kwargs.pop('workflow_job_id', None)
-        job_event = cls.objects.create(**kwargs)
+        event = cls(**kwargs)
         if workflow_job_id:
-            setattr(job_event, 'workflow_job_id', workflow_job_id)
-        analytics_logger.info('Event data saved.', extra=dict(python_objects=dict(job_event=job_event)))
-        return job_event
+            setattr(event, 'workflow_job_id', workflow_job_id)
+        setattr(event, 'host_map', host_map)
+        event._update_from_event_data()
+        return event
 
     @property
     def job_verbosity(self):
         return 0
-
-    def save(self, *args, **kwargs):
-        # If update_fields has been specified, add our field names to it,
-        # if it hasn't been specified, then we're just doing a normal save.
-        update_fields = kwargs.get('update_fields', [])
-        # Update model fields and related objects unless we're only updating
-        # failed/changed flags triggered from a child event.
-        from_parent_update = kwargs.pop('from_parent_update', False)
-        if not from_parent_update:
-            # Update model fields from event data.
-            updated_fields = self._update_from_event_data()
-            for field in updated_fields:
-                if field not in update_fields:
-                    update_fields.append(field)
-
-            # Update host related field from host_name.
-            if hasattr(self, 'job') and not self.host_id and self.host_name:
-                if self.job.inventory.kind == 'smart':
-                    # optimization to avoid calling inventory.hosts, which
-                    # can take a long time to run under some circumstances
-                    from awx.main.models.inventory import SmartInventoryMembership
-                    membership = SmartInventoryMembership.objects.filter(
-                        inventory=self.job.inventory, host__name=self.host_name
-                    ).first()
-                    if membership:
-                        host_id = membership.host_id
-                    else:
-                        host_id = None
-                else:
-                    host_qs = self.job.inventory.hosts.filter(name=self.host_name)
-                    host_id = host_qs.only('id').values_list('id', flat=True).first()
-                if host_id != self.host_id:
-                    self.host_id = host_id
-                    if 'host_id' not in update_fields:
-                        update_fields.append('host_id')
-        super(BasePlaybookEvent, self).save(*args, **kwargs)
-
-        # Update related objects after this event is saved.
-        if hasattr(self, 'job') and not from_parent_update:
-            if getattr(settings, 'CAPTURE_JOB_EVENT_HOSTS', False):
-                self._update_hosts()
-            if self.parent_uuid:
-                kwargs = {}
-                if self.changed is True:
-                    kwargs['changed'] = True
-                if self.failed is True:
-                    kwargs['failed'] = True
-                if kwargs:
-                    JobEvent.objects.filter(job_id=self.job_id, uuid=self.parent_uuid).update(**kwargs)
-
-            if self.event == 'playbook_on_stats':
-                hostnames = self._hostnames()
-                self._update_host_summary_from_stats(hostnames)
-                try:
-                    self.job.inventory.update_computed_fields()
-                except DatabaseError:
-                    logger.exception('Computed fields database error saving event {}'.format(self.pk))
-
 
 
 class JobEvent(BasePlaybookEvent):
@@ -412,6 +441,7 @@ class JobEvent(BasePlaybookEvent):
             ('job', 'parent_uuid'),
         ]
 
+    id = models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
     job = models.ForeignKey(
         'Job',
         related_name='job_events',
@@ -431,19 +461,6 @@ class JobEvent(BasePlaybookEvent):
         default='',
         editable=False,
     )
-    hosts = models.ManyToManyField(
-        'Host',
-        related_name='job_events',
-        editable=False,
-    )
-    parent = models.ForeignKey(
-        'self',
-        related_name='children',
-        null=True,
-        default=None,
-        on_delete=models.SET_NULL,
-        editable=False,
-    )
     parent_uuid = models.CharField(
         max_length=1024,
         default='',
@@ -455,38 +472,6 @@ class JobEvent(BasePlaybookEvent):
 
     def __str__(self):
         return u'%s @ %s' % (self.get_event_display2(), self.created.isoformat())
-
-    def _update_from_event_data(self):
-        # Update job event hostname
-        updated_fields = super(JobEvent, self)._update_from_event_data()
-        value = force_text(self.event_data.get('host', '')).strip()
-        if value != getattr(self, 'host_name'):
-            setattr(self, 'host_name', value)
-            updated_fields.add('host_name')
-        return updated_fields
-
-    def _update_hosts(self, extra_host_pks=None):
-        # Update job event hosts m2m from host_name, propagate to parent events.
-        extra_host_pks = set(extra_host_pks or [])
-        hostnames = set()
-        if self.host_name:
-            hostnames.add(self.host_name)
-        if self.event == 'playbook_on_stats':
-            try:
-                for v in self.event_data.values():
-                    hostnames.update(v.keys())
-            except AttributeError: # In case event_data or v isn't a dict.
-                pass
-        qs = self.job.inventory.hosts.all()
-        qs = qs.filter(models.Q(name__in=hostnames) | models.Q(pk__in=extra_host_pks))
-        qs = qs.exclude(job_events__pk=self.id).only('id')
-        for host in qs:
-            self.hosts.add(host)
-        if self.parent_uuid:
-            parent = JobEvent.objects.filter(uuid=self.parent_uuid)
-            if parent.exists():
-                parent = parent[0]
-                parent._update_hosts(qs.values_list('id', flat=True))
 
     def _hostnames(self):
         hostnames = set()
@@ -502,29 +487,45 @@ class JobEvent(BasePlaybookEvent):
             if not self.job or not self.job.inventory:
                 logger.info('Event {} missing job or inventory, host summaries not updated'.format(self.pk))
                 return
-            qs = self.job.inventory.hosts.filter(name__in=hostnames)
             job = self.job
+
+            from awx.main.models import Host, JobHostSummary  # circular import
+            all_hosts = Host.objects.filter(
+                pk__in=self.host_map.values()
+            ).only('id')
+            existing_host_ids = set(h.id for h in all_hosts)
+
+            summaries = dict()
             for host in hostnames:
+                host_id = self.host_map.get(host, None)
+                if host_id not in existing_host_ids:
+                    host_id = None
                 host_stats = {}
                 for stat in ('changed', 'dark', 'failures', 'ignored', 'ok', 'processed', 'rescued', 'skipped'):
                     try:
                         host_stats[stat] = self.event_data.get(stat, {}).get(host, 0)
                     except AttributeError:  # in case event_data[stat] isn't a dict.
                         pass
-                if qs.filter(name=host).exists():
-                    host_actual = qs.get(name=host)
-                    host_summary, created = job.job_host_summaries.get_or_create(host=host_actual, host_name=host_actual.name, defaults=host_stats)
-                else:
-                    host_summary, created = job.job_host_summaries.get_or_create(host_name=host, defaults=host_stats)
+                summary = JobHostSummary(
+                    created=now(), modified=now(), job_id=job.id, host_id=host_id, host_name=host, **host_stats
+                )
+                summary.failed = bool(summary.dark or summary.failures)
+                summaries[(host_id, host)] = summary
 
-                if not created:
-                    update_fields = []
-                    for stat, value in host_stats.items():
-                        if getattr(host_summary, stat) != value:
-                            setattr(host_summary, stat, value)
-                            update_fields.append(stat)
-                    if update_fields:
-                        host_summary.save(update_fields=update_fields)
+            JobHostSummary.objects.bulk_create(summaries.values())
+
+            # update the last_job_id and last_job_host_summary_id
+            # in single queries
+            host_mapping = dict(
+                (summary['host_id'], summary['id'])
+                for summary in JobHostSummary.objects.filter(job_id=job.id).values('id', 'host_id')
+            )
+            for h in all_hosts:
+                h.last_job_id = job.id
+                if h.id in host_mapping:
+                    h.last_job_host_summary_id = host_mapping[h.id]
+            Host.objects.bulk_update(all_hosts, ['last_job_id', 'last_job_host_summary_id'])
+
 
     @property
     def job_verbosity(self):
@@ -545,6 +546,7 @@ class ProjectUpdateEvent(BasePlaybookEvent):
             ('project_update', 'end_line'),
         ]
 
+    id = models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
     project_update = models.ForeignKey(
         'ProjectUpdate',
         related_name='project_update_events',
@@ -605,6 +607,17 @@ class BaseCommandEvent(CreatedModifiedModel):
 
     @classmethod
     def create_from_data(cls, **kwargs):
+        #
+        # ⚠️  D-D-D-DANGER ZONE ⚠️
+        # This function is called by the callback receiver *once* for *every
+        # event* emitted by Ansible as a playbook runs.  That means that
+        # changes to this function are _very_ susceptible to introducing
+        # performance regressions (which the user will experience as "my
+        # playbook stdout takes too long to show up"), *especially* code which
+        # might invoke additional database queries per event.
+        #
+        # Proceed with caution!
+        #
         # Convert the datetime for the event's creation
         # appropriately, and include a time zone for it.
         #
@@ -620,12 +633,8 @@ class BaseCommandEvent(CreatedModifiedModel):
 
         sanitize_event_keys(kwargs, cls.VALID_KEYS)
         kwargs.pop('workflow_job_id', None)
-        event = cls.objects.create(**kwargs)
-        if isinstance(event, AdHocCommandEvent):
-            analytics_logger.info(
-                'Event data saved.',
-                extra=dict(python_objects=dict(job_event=event))
-            )
+        event = cls(**kwargs)
+        event._update_from_event_data()
         return event
 
     def get_event_display(self):
@@ -640,10 +649,15 @@ class BaseCommandEvent(CreatedModifiedModel):
     def get_host_status_counts(self):
         return create_host_status_counts(getattr(self, 'event_data', {}))
 
+    def _update_from_event_data(self):
+        pass
+
 
 class AdHocCommandEvent(BaseCommandEvent):
 
-    VALID_KEYS = BaseCommandEvent.VALID_KEYS + ['ad_hoc_command_id', 'event', 'workflow_job_id']
+    VALID_KEYS = BaseCommandEvent.VALID_KEYS + [
+        'ad_hoc_command_id', 'event', 'host_name', 'host_id', 'workflow_job_id'
+    ]
 
     class Meta:
         app_label = 'main'
@@ -684,6 +698,7 @@ class AdHocCommandEvent(BaseCommandEvent):
     FAILED_EVENTS = [x[0] for x in EVENT_TYPES if x[2]]
     EVENT_CHOICES = [(x[0], x[1]) for x in EVENT_TYPES]
 
+    id = models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
     event = models.CharField(
         max_length=100,
         choices=EVENT_CHOICES,
@@ -719,34 +734,18 @@ class AdHocCommandEvent(BaseCommandEvent):
     def get_absolute_url(self, request=None):
         return reverse('api:ad_hoc_command_event_detail', kwargs={'pk': self.pk}, request=request)
 
-    def save(self, *args, **kwargs):
-        # If update_fields has been specified, add our field names to it,
-        # if it hasn't been specified, then we're just doing a normal save.
-        update_fields = kwargs.get('update_fields', [])
+    def _update_from_event_data(self):
         res = self.event_data.get('res', None)
         if self.event in self.FAILED_EVENTS:
             if not self.event_data.get('ignore_errors', False):
                 self.failed = True
-                if 'failed' not in update_fields:
-                    update_fields.append('failed')
         if isinstance(res, dict) and res.get('changed', False):
             self.changed = True
-            if 'changed' not in update_fields:
-                update_fields.append('changed')
-        self.host_name = self.event_data.get('host', '').strip()
-        if 'host_name' not in update_fields:
-            update_fields.append('host_name')
-        if not self.host_id and self.host_name:
-            host_qs = self.ad_hoc_command.inventory.hosts.filter(name=self.host_name)
-            try:
-                host_id = host_qs.only('id').values_list('id', flat=True)
-                if host_id.exists():
-                    self.host_id = host_id[0]
-                    if 'host_id' not in update_fields:
-                        update_fields.append('host_id')
-            except (IndexError, AttributeError):
-                pass
-        super(AdHocCommandEvent, self).save(*args, **kwargs)
+
+        analytics_logger.info(
+            'Event data saved.',
+            extra=dict(python_objects=dict(job_event=self))
+        )
 
 
 class InventoryUpdateEvent(BaseCommandEvent):
@@ -762,6 +761,7 @@ class InventoryUpdateEvent(BaseCommandEvent):
             ('inventory_update', 'end_line'),
         ]
 
+    id = models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
     inventory_update = models.ForeignKey(
         'InventoryUpdate',
         related_name='inventory_update_events',
@@ -795,6 +795,7 @@ class SystemJobEvent(BaseCommandEvent):
             ('system_job', 'end_line'),
         ]
 
+    id = models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
     system_job = models.ForeignKey(
         'SystemJob',
         related_name='system_job_events',

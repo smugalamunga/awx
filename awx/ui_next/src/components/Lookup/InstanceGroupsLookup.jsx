@@ -1,84 +1,120 @@
-import React from 'react';
-import PropTypes from 'prop-types';
+import React, { useCallback, useEffect } from 'react';
+import { arrayOf, string, func, object, bool } from 'prop-types';
+import { withRouter } from 'react-router-dom';
 import { withI18n } from '@lingui/react';
 import { t } from '@lingui/macro';
-import { FormGroup, Tooltip } from '@patternfly/react-core';
-import { QuestionCircleIcon as PFQuestionCircleIcon } from '@patternfly/react-icons';
-import styled from 'styled-components';
+import { FormGroup } from '@patternfly/react-core';
+import { InstanceGroupsAPI } from '../../api';
+import { getQSConfig, parseQueryString } from '../../util/qs';
+import { FieldTooltip } from '../FormField';
+import OptionsList from '../OptionsList';
+import useRequest from '../../util/useRequest';
+import Lookup from './Lookup';
+import LookupErrorMessage from './shared/LookupErrorMessage';
 
-import { InstanceGroupsAPI } from '@api';
-import Lookup from '@components/Lookup';
+const QS_CONFIG = getQSConfig('instance_groups', {
+  page: 1,
+  page_size: 5,
+  order_by: 'name',
+});
 
-const QuestionCircleIcon = styled(PFQuestionCircleIcon)`
-  margin-left: 10px;
-`;
+function InstanceGroupsLookup(props) {
+  const {
+    value,
+    onChange,
+    tooltip,
+    className,
+    required,
+    history,
+    i18n,
+  } = props;
 
-const getInstanceGroups = async params => InstanceGroupsAPI.read(params);
+  const {
+    result: { instanceGroups, count },
+    request: fetchInstanceGroups,
+    error,
+    isLoading,
+  } = useRequest(
+    useCallback(async () => {
+      const params = parseQueryString(QS_CONFIG, history.location.search);
+      const { data } = await InstanceGroupsAPI.read(params);
+      return {
+        instanceGroups: data.results,
+        count: data.count,
+      };
+    }, [history.location]),
+    { instanceGroups: [], count: 0 }
+  );
 
-class InstanceGroupsLookup extends React.Component {
-  render() {
-    const { value, tooltip, onChange, className, i18n } = this.props;
+  useEffect(() => {
+    fetchInstanceGroups();
+  }, [fetchInstanceGroups]);
 
-    /*
-      Wrapping <div> added to workaround PF bug:
-      https://github.com/patternfly/patternfly-react/issues/2855
-    */
-    return (
-      <div className={className}>
-        <FormGroup
-          label={i18n._(t`Instance Groups`)}
-          fieldId="org-instance-groups"
-        >
-          {tooltip && (
-            <Tooltip position="right" content={tooltip}>
-              <QuestionCircleIcon />
-            </Tooltip>
-          )}
-          <Lookup
-            id="org-instance-groups"
-            lookupHeader={i18n._(t`Instance Groups`)}
-            name="instanceGroups"
-            value={value}
-            onLookupSave={onChange}
-            getItems={getInstanceGroups}
-            qsNamespace="instance-group"
-            multiple
-            columns={[
+  return (
+    <FormGroup
+      className={className}
+      label={i18n._(t`Instance Groups`)}
+      fieldId="org-instance-groups"
+    >
+      {tooltip && <FieldTooltip content={tooltip} />}
+      <Lookup
+        id="org-instance-groups"
+        header={i18n._(t`Instance Groups`)}
+        value={value}
+        onChange={onChange}
+        qsConfig={QS_CONFIG}
+        multiple
+        required={required}
+        isLoading={isLoading}
+        renderOptionsList={({ state, dispatch, canDelete }) => (
+          <OptionsList
+            value={state.selectedItems}
+            options={instanceGroups}
+            optionCount={count}
+            searchColumns={[
               {
                 name: i18n._(t`Name`),
                 key: 'name',
-                isSortable: true,
-                isSearchable: true,
+                isDefault: true,
               },
               {
-                name: i18n._(t`Modified`),
-                key: 'modified',
-                isSortable: false,
-                isNumeric: true,
-              },
-              {
-                name: i18n._(t`Created`),
-                key: 'created',
-                isSortable: false,
-                isNumeric: true,
+                name: i18n._(t`Credential Name`),
+                key: 'credential__name',
               },
             ]}
-            sortedColumnKey="name"
+            sortColumns={[
+              {
+                name: i18n._(t`Name`),
+                key: 'name',
+              },
+            ]}
+            multiple={state.multiple}
+            header={i18n._(t`Instance Groups`)}
+            name="instanceGroups"
+            qsConfig={QS_CONFIG}
+            readOnly={!canDelete}
+            selectItem={item => dispatch({ type: 'SELECT_ITEM', item })}
+            deselectItem={item => dispatch({ type: 'DESELECT_ITEM', item })}
           />
-        </FormGroup>
-      </div>
-    );
-  }
+        )}
+      />
+      <LookupErrorMessage error={error} />
+    </FormGroup>
+  );
 }
 
 InstanceGroupsLookup.propTypes = {
-  value: PropTypes.arrayOf(PropTypes.object).isRequired,
-  tooltip: PropTypes.string,
-  onChange: PropTypes.func.isRequired,
+  value: arrayOf(object).isRequired,
+  tooltip: string,
+  onChange: func.isRequired,
+  className: string,
+  required: bool,
 };
 
 InstanceGroupsLookup.defaultProps = {
   tooltip: '',
+  className: '',
+  required: false,
 };
 
-export default withI18n()(InstanceGroupsLookup);
+export default withI18n()(withRouter(InstanceGroupsLookup));

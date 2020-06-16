@@ -4,8 +4,9 @@ import json
 from datetime import timedelta
 
 from awx.main.scheduler import TaskManager
+from awx.main.scheduler.dependency_graph import DependencyGraph
 from awx.main.utils import encrypt_field
-from awx.main.models import WorkflowJobTemplate, JobTemplate
+from awx.main.models import WorkflowJobTemplate, JobTemplate, Job
 
 
 @pytest.mark.django_db
@@ -306,8 +307,8 @@ def test_shared_dependencies_launch(default_instance_group, job_template_factory
         TaskManager().schedule()
         pu = p.project_updates.first()
         iu = ii.inventory_updates.first()
-        TaskManager.start_task.assert_has_calls([mock.call(pu, default_instance_group, [iu, j1], instance),
-                                                 mock.call(iu, default_instance_group, [pu, j1], instance)])
+        TaskManager.start_task.assert_has_calls([mock.call(iu, default_instance_group, [j1, j2, pu], instance),
+                                                mock.call(pu, default_instance_group, [j1, j2, iu], instance)])
         pu.status = "successful"
         pu.finished = pu.created + timedelta(seconds=1)
         pu.save()
@@ -326,3 +327,91 @@ def test_shared_dependencies_launch(default_instance_group, job_template_factory
     iu = [x for x in ii.inventory_updates.all()]
     assert len(pu) == 1
     assert len(iu) == 1
+
+
+@pytest.mark.django_db
+def test_job_not_blocking_project_update(default_instance_group, job_template_factory):
+    objects = job_template_factory('jt', organization='org1', project='proj',
+                                   inventory='inv', credential='cred',
+                                   jobs=["job"])
+    job = objects.jobs["job"]
+    job.instance_group = default_instance_group
+    job.status = "running"
+    job.save()
+
+    with mock.patch("awx.main.scheduler.TaskManager.start_task"):
+        task_manager = TaskManager()
+        task_manager._schedule()
+
+        proj = objects.project
+        project_update = proj.create_project_update()
+        project_update.instance_group = default_instance_group
+        project_update.status = "pending"
+        project_update.save()
+        assert not task_manager.is_job_blocked(project_update)
+
+        dependency_graph = DependencyGraph(None)
+        dependency_graph.add_job(job)
+        assert not dependency_graph.is_job_blocked(project_update)
+
+
+@pytest.mark.django_db
+def test_job_not_blocking_inventory_update(default_instance_group, job_template_factory, inventory_source_factory):
+    objects = job_template_factory('jt', organization='org1', project='proj',
+                                   inventory='inv', credential='cred',
+                                   jobs=["job"])
+    job = objects.jobs["job"]
+    job.instance_group = default_instance_group
+    job.status = "running"
+    job.save()
+
+    with mock.patch("awx.main.scheduler.TaskManager.start_task"):
+        task_manager = TaskManager()
+        task_manager._schedule()
+
+        inv = objects.inventory
+        inv_source = inventory_source_factory("ec2")
+        inv_source.source = "ec2"
+        inv.inventory_sources.add(inv_source)
+        inventory_update = inv_source.create_inventory_update()
+        inventory_update.instance_group = default_instance_group
+        inventory_update.status = "pending"
+        inventory_update.save()
+
+        assert not task_manager.is_job_blocked(inventory_update)
+
+        dependency_graph = DependencyGraph(None)
+        dependency_graph.add_job(job)
+        assert not dependency_graph.is_job_blocked(inventory_update)
+
+
+@pytest.mark.django_db
+def test_generate_dependencies_only_once(job_template_factory):
+    objects = job_template_factory('jt', organization='org1')
+
+    job = objects.job_template.create_job()
+    job.status = "pending"
+    job.name = "job_gen_dep"
+    job.save()
+
+
+    with mock.patch("awx.main.scheduler.TaskManager.start_task"):
+        # job starts with dependencies_processed as False
+        assert not job.dependencies_processed
+        # run one cycle of ._schedule() to generate dependencies
+        TaskManager()._schedule()
+
+        # make sure dependencies_processed is now True
+        job = Job.objects.filter(name="job_gen_dep")[0]
+        assert job.dependencies_processed
+
+        # Run ._schedule() again, but make sure .generate_dependencies() is not
+        # called with job in the argument list
+        tm = TaskManager()
+        tm.generate_dependencies = mock.MagicMock()
+        tm._schedule()
+
+        # .call_args is tuple, (positional_args, kwargs), [0][0] then is
+        # the first positional arg, i.e. the first argument of
+        # .generate_dependencies()
+        assert tm.generate_dependencies.call_args[0][0] == []

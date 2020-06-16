@@ -1,42 +1,44 @@
 ---
 dockerhub_version: "{{ lookup('file', playbook_dir + '/../VERSION') }}"
-create_preload_data: True
+create_preload_data: true
 
 admin_user: 'admin'
 admin_email: 'root@localhost'
 admin_password: ''
 
-rabbitmq_user: 'awx'
-rabbitmq_password: ''
-rabbitmq_erlang_cookie: ''
-
 kubernetes_base_path: "{{ local_base_config_path|default('/tmp') }}/{{ kubernetes_deployment_name }}-config"
 
 kubernetes_task_version: "{{ tower_package_version | default(dockerhub_version) }}"
-kubernetes_task_image: "{{ tower_package_name | default('ansible/awx_task') }}"
-
 kubernetes_web_version: "{{ tower_package_version | default(dockerhub_version) }}"
-kubernetes_web_image: "{{ tower_package_name | default('ansible/awx_web') }}"
+kubernetes_awx_image: "{{ tower_package_name | default('ansible/awx') }}"
+kubernetes_web_image: "{{ kubernetes_awx_image }}"
+kubernetes_task_image: "{{ kubernetes_awx_image }}"
+
+awx_psp_create: false
+awx_psp_name: 'awx'
+awx_psp_privileged: true
 
 web_mem_request: 1
 web_cpu_request: 500
+web_security_context_enabled: true
+web_security_context_privileged: false
 
 task_mem_request: 2
 task_cpu_request: 1500
+task_security_context_enabled: true
+task_security_context_privileged: true
 
-rabbitmq_mem_request: 2
-rabbitmq_cpu_request: 500
+redis_mem_request: 2
+redis_cpu_request: 500
+redis_security_context_enabled: true
+redis_security_context_privileged: false
+redis_security_context_user: 1001
 
-memcached_mem_request: 1
-memcached_cpu_request: 500
+kubernetes_redis_image: "redis"
+kubernetes_redis_image_tag: "latest"
+kubernetes_redis_config_mount_path: "/usr/local/etc/redis/redis.conf"
 
-kubernetes_rabbitmq_version: "3.7.21"
-kubernetes_rabbitmq_image: "ansible/awx_rabbitmq"
-
-kubernetes_memcached_version: "latest"
-kubernetes_memcached_image: "memcached"
-
-openshift_pg_emptydir: no
+openshift_pg_emptydir: false
 openshift_pg_pvc_name: postgresql
 
 kubernetes_deployment_name: awx
@@ -55,6 +57,7 @@ custom_venvs_path: "/opt/custom-venvs"
 custom_venvs_python: "python2"
 
 ca_trust_bundle: "/etc/pki/tls/certs/ca-bundle.crt"
-rabbitmq_use_ssl: False
 
 container_groups_image: "ansible/ansible-runner"
+
+uwsgi_bash: "bash -c"

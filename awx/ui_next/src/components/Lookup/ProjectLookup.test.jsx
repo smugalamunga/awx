@@ -1,10 +1,11 @@
 import React from 'react';
-import { mountWithContexts } from '@testUtils/enzymeHelpers';
-import { sleep } from '@testUtils/testUtils';
-import { ProjectsAPI } from '@api';
+import { act } from 'react-dom/test-utils';
+import { mountWithContexts } from '../../../testUtils/enzymeHelpers';
+import { sleep } from '../../../testUtils/testUtils';
+import { ProjectsAPI } from '../../api';
 import ProjectLookup from './ProjectLookup';
 
-jest.mock('@api');
+jest.mock('../../api');
 
 describe('<ProjectLookup />', () => {
   test('should auto-select project when only one available', async () => {
@@ -14,10 +15,14 @@ describe('<ProjectLookup />', () => {
         count: 1,
       },
     });
-    const onChange = jest.fn();
-    mountWithContexts(<ProjectLookup onChange={onChange} />);
+    const autocomplete = jest.fn();
+    await act(async () => {
+      mountWithContexts(
+        <ProjectLookup autocomplete={autocomplete} onChange={() => {}} />
+      );
+    });
     await sleep(0);
-    expect(onChange).toHaveBeenCalledWith({ id: 1 }, 'project');
+    expect(autocomplete).toHaveBeenCalledWith({ id: 1 });
   });
 
   test('should not auto-select project when multiple available', async () => {
@@ -27,9 +32,13 @@ describe('<ProjectLookup />', () => {
         count: 2,
       },
     });
-    const onChange = jest.fn();
-    mountWithContexts(<ProjectLookup onChange={onChange} />);
+    const autocomplete = jest.fn();
+    await act(async () => {
+      mountWithContexts(
+        <ProjectLookup autocomplete={autocomplete} onChange={() => {}} />
+      );
+    });
     await sleep(0);
-    expect(onChange).not.toHaveBeenCalled();
+    expect(autocomplete).not.toHaveBeenCalled();
   });
 });

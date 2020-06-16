@@ -14,6 +14,10 @@ export function getQSConfig(
   if (!namespace) {
     throw new Error('a QS namespace is required');
   }
+  // if order_by isn't passed, default to name
+  if (!defaultParams.order_by) {
+    defaultParams.order_by = 'name';
+  }
   return {
     namespace,
     defaultParams,
@@ -30,7 +34,7 @@ export function getQSConfig(
  */
 export function parseQueryString(config, queryString) {
   if (!queryString) {
-    return config.defaultParams;
+    return config.defaultParams || {};
   }
   const params = stringToObject(config, queryString);
   return addDefaultsToObject(config, params);
@@ -86,7 +90,6 @@ export { addDefaultsToObject as _addDefaultsToObject };
 /**
  * Convert query param object to url query string
  * Used to encode params for interacting with the api
- * @param {object} qs config object for namespacing params, filtering defaults
  * @param {object} query param object
  * @return {string} url query string
  */
@@ -156,7 +159,7 @@ export function removeParams(config, oldParams, paramsToRemove) {
   };
   Object.keys(oldParams).forEach(key => {
     const value = removeParam(oldParams[key], paramsToRemove[key]);
-    if (value) {
+    if (value !== null) {
       updated[key] = value;
     }
   });
@@ -202,10 +205,10 @@ export function mergeParams(oldParams, newParams) {
 }
 
 function mergeParam(oldVal, newVal) {
-  if (!newVal) {
+  if (!newVal && newVal !== '') {
     return oldVal;
   }
-  if (!oldVal) {
+  if (!oldVal && oldVal !== '') {
     return newVal;
   }
   let merged;

@@ -36,11 +36,14 @@ from django.utils.encoding import smart_str
 from django.utils.text import slugify
 from django.apps import apps
 
+# AWX
+from awx.conf.license import get_license
+
 logger = logging.getLogger('awx.main.utils')
 
 __all__ = [
     'get_object_or_400', 'camelcase_to_underscore', 'underscore_to_camelcase', 'memoize',
-    'memoize_delete', 'get_ansible_version', 'get_ssh_version', 'get_licenser',
+    'memoize_delete', 'get_ansible_version', 'get_licenser', 'get_awx_http_client_headers',
     'get_awx_version', 'update_scm_url', 'get_type_for_model', 'get_model_for_type',
     'copy_model_by_class', 'region_sorting', 'copy_m2m_relationships',
     'prefetch_page_capabilities', 'to_python_boolean', 'ignore_inventory_computed_fields',
@@ -53,6 +56,7 @@ __all__ = [
     'has_model_field_prefetched', 'set_environ', 'IllegalArgumentError',
     'get_custom_venv_choices', 'get_external_account', 'task_manager_bulk_reschedule',
     'schedule_task_manager', 'classproperty', 'create_temporary_fifo', 'truncate_stdout',
+    'StubLicense'
 ]
 
 
@@ -186,20 +190,6 @@ def get_ansible_version():
     return _get_ansible_version('ansible')
 
 
-@memoize()
-def get_ssh_version():
-    '''
-    Return SSH version installed.
-    '''
-    try:
-        proc = subprocess.Popen(['ssh', '-V'],
-                                stderr=subprocess.PIPE)
-        result = smart_str(proc.communicate()[1])
-        return result.split(" ")[0].split("_")[1]
-    except Exception:
-        return 'unknown'
-
-
 def get_awx_version():
     '''
     Return AWX version as reported by setuptools.
@@ -210,6 +200,19 @@ def get_awx_version():
         return pkg_resources.require('awx')[0].version
     except Exception:
         return __version__
+
+
+def get_awx_http_client_headers():
+    license = get_license(show_key=False).get('license_type', 'UNLICENSED')
+    headers = {
+        'Content-Type': 'application/json',
+        'User-Agent': '{} {} ({})'.format(
+            'AWX' if license == 'open' else 'Red Hat Ansible Tower',
+            get_awx_version(),
+            license
+        )
+    }
+    return headers
 
 
 class StubLicense(object):
@@ -363,7 +366,12 @@ def get_allowed_fields(obj, serializer_mapping):
         'oauth2accesstoken': ['last_used'],
         'oauth2application': ['client_secret']
     }
-    field_blacklist = ACTIVITY_STREAM_FIELD_EXCLUSIONS.get(obj._meta.model_name, [])
+    model_name = obj._meta.model_name
+    field_blacklist = ACTIVITY_STREAM_FIELD_EXCLUSIONS.get(model_name, [])
+    # see definition of from_db for CredentialType
+    # injection logic of any managed types are incompatible with activity stream
+    if model_name == 'credentialtype' and obj.managed_by_tower and obj.namespace:
+        field_blacklist.extend(['inputs', 'injectors'])
     if field_blacklist:
         allowed_fields = [f for f in allowed_fields if f not in field_blacklist]
     return allowed_fields
@@ -1002,14 +1010,17 @@ def get_custom_venv_choices(custom_paths=None):
     custom_venv_choices = []
 
     for custom_venv_path in all_venv_paths:
-        if os.path.exists(custom_venv_path):
-            custom_venv_choices.extend([
-                os.path.join(custom_venv_path, x, '')
-                for x in os.listdir(custom_venv_path)
-                if x != 'awx' and
-                os.path.isdir(os.path.join(custom_venv_path, x)) and
-                os.path.exists(os.path.join(custom_venv_path, x, 'bin', 'activate'))
-            ])
+        try:
+            if os.path.exists(custom_venv_path):
+                custom_venv_choices.extend([
+                    os.path.join(custom_venv_path, x, '')
+                    for x in os.listdir(custom_venv_path)
+                    if x != 'awx' and
+                    os.path.isdir(os.path.join(custom_venv_path, x)) and
+                    os.path.exists(os.path.join(custom_venv_path, x, 'bin', 'activate'))
+                ])
+        except Exception:
+            logger.exception("Encountered an error while discovering custom virtual environments.")
     return custom_venv_choices
 
 

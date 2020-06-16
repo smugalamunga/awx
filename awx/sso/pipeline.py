@@ -78,7 +78,7 @@ def _update_m2m_from_expression(user, related, expr, remove=True):
         related.remove(user)
 
 
-def _update_org_from_attr(user, related, attr, remove, remove_admins):
+def _update_org_from_attr(user, related, attr, remove, remove_admins, remove_auditors):
     from awx.main.models import Organization
 
     org_ids = []
@@ -96,6 +96,10 @@ def _update_org_from_attr(user, related, attr, remove, remove_admins):
     if remove_admins:
         [o.admin_role.members.remove(user) for o in
             Organization.objects.filter(Q(admin_role__members=user) & ~Q(id__in=org_ids))]
+
+    if remove_auditors:
+        [o.auditor_role.members.remove(user) for o in
+            Organization.objects.filter(Q(auditor_role__members=user) & ~Q(id__in=org_ids))]
 
 
 def update_user_orgs(backend, details, user=None, *args, **kwargs):
@@ -162,9 +166,9 @@ def update_user_orgs_by_saml_attr(backend, details, user=None, *args, **kwargs):
     attr_admin_values = kwargs.get('response', {}).get('attributes', {}).get(org_map.get('saml_admin_attr'), [])
     attr_auditor_values = kwargs.get('response', {}).get('attributes', {}).get(org_map.get('saml_auditor_attr'), [])
 
-    _update_org_from_attr(user, "member_role", attr_values, remove, False)
-    _update_org_from_attr(user, "admin_role", attr_admin_values, False, remove_admins)
-    _update_org_from_attr(user, "auditor_role", attr_auditor_values, False, remove_auditors)
+    _update_org_from_attr(user, "member_role", attr_values, remove, False, False)
+    _update_org_from_attr(user, "admin_role", attr_admin_values, False, remove_admins, False)
+    _update_org_from_attr(user, "auditor_role", attr_auditor_values, False, False, remove_auditors)
 
 
 def update_user_teams_by_saml_attr(backend, details, user=None, *args, **kwargs):
@@ -183,13 +187,22 @@ def update_user_teams_by_saml_attr(backend, details, user=None, *args, **kwargs)
 
     team_ids = []
     for team_name_map in team_map.get('team_org_map', []):
-        team_name = team_name_map.get('team', '')
+        team_name = team_name_map.get('team', None)
+        team_alias = team_name_map.get('team_alias', None)
+        organization_name = team_name_map.get('organization', None)
+        organization_alias = team_name_map.get('organization_alias', None)
         if team_name in saml_team_names:
-            if not team_name_map.get('organization', ''):
+            if not organization_name:
                 # Settings field validation should prevent this.
                 logger.error("organization name invalid for team {}".format(team_name))
                 continue
-            org = Organization.objects.get_or_create(name=team_name_map['organization'])[0]
+
+            if organization_alias:
+                organization_name = organization_alias
+            org = Organization.objects.get_or_create(name=organization_name)[0]
+
+            if team_alias:
+                team_name = team_alias
             team = Team.objects.get_or_create(name=team_name, organization=org)[0]
 
             team_ids.append(team.id)

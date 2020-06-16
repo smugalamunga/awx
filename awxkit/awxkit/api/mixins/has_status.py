@@ -1,9 +1,8 @@
 from datetime import datetime
 import json
 
-import six
-
 from awxkit.utils import poll_until
+from awxkit.exceptions import WaitUntilTimeout
 
 
 def bytes_to_str(obj):
@@ -28,7 +27,11 @@ class HasStatus(object):
 
     def wait_until_status(self, status, interval=1, timeout=60, **kwargs):
         status = [status] if not isinstance(status, (list, tuple)) else status
-        poll_until(lambda: getattr(self.get(), 'status') in status, interval=interval, timeout=timeout, **kwargs)
+        try:
+            poll_until(lambda: getattr(self.get(), 'status') in status, interval=interval, timeout=timeout, **kwargs)
+        except WaitUntilTimeout:
+            # This will raise a more informative error than just "WaitUntilTimeout" error
+            self.assert_status(status)
         return self
 
     def wait_until_completed(self, interval=5, timeout=60, **kwargs):
@@ -45,7 +48,7 @@ class HasStatus(object):
         return self.wait_until_status(self.started_statuses, interval=interval, timeout=timeout)
 
     def assert_status(self, status_list, msg=None):
-        if isinstance(status_list, six.text_type):
+        if isinstance(status_list, str):
             status_list = [status_list]
         if self.status in status_list:
             # include corner cases in is_successful logic

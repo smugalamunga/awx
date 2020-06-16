@@ -1,13 +1,12 @@
 import React from 'react';
 import { createMemoryHistory } from 'history';
-import { mountWithContexts } from '@testUtils/enzymeHelpers';
-import { sleep } from '@testUtils/testUtils';
+import { mountWithContexts } from '../../../testUtils/enzymeHelpers';
 import ListHeader from './ListHeader';
 
 describe('ListHeader', () => {
   const qsConfig = {
     namespace: 'item',
-    defaultParams: { page: 1, page_size: 5, order_by: 'name' },
+    defaultParams: { page: 1, page_size: 5, order_by: 'foo' },
     integerFields: [],
   };
   const renderToolbarFn = jest.fn();
@@ -17,9 +16,8 @@ describe('ListHeader', () => {
       <ListHeader
         itemCount={50}
         qsConfig={qsConfig}
-        columns={[
-          { name: 'foo', key: 'foo', isSearchable: true, isSortable: true },
-        ]}
+        searchColumns={[{ name: 'foo', key: 'foo', isDefault: true }]}
+        sortColumns={[{ name: 'foo', key: 'foo' }]}
         renderToolbar={renderToolbarFn}
       />
     );
@@ -35,27 +33,82 @@ describe('ListHeader', () => {
       <ListHeader
         itemCount={7}
         qsConfig={qsConfig}
-        columns={[
-          { name: 'name', key: 'name', isSearchable: true, isSortable: true },
-        ]}
+        searchColumns={[{ name: 'foo', key: 'foo', isDefault: true }]}
+        sortColumns={[{ name: 'foo', key: 'foo' }]}
       />,
       { context: { router: { history } } }
     );
 
     const toolbar = wrapper.find('DataListToolbar');
-    expect(toolbar.prop('sortedColumnKey')).toEqual('name');
-    expect(toolbar.prop('sortOrder')).toEqual('ascending');
-    toolbar.prop('onSort')('name', 'descending');
-    expect(history.location.search).toEqual('?item.order_by=-name');
-    await sleep(0);
-    wrapper.update();
-
-    expect(toolbar.prop('sortedColumnKey')).toEqual('name');
-    // TODO: this assertion required updating queryParams prop. Consider
-    // fixing after #147 is done:
-    // expect(toolbar.prop('sortOrder')).toEqual('descending');
-    toolbar.prop('onSort')('name', 'ascending');
+    toolbar.prop('onSort')('foo', 'descending');
+    expect(history.location.search).toEqual('?item.order_by=-foo');
+    toolbar.prop('onSort')('foo', 'ascending');
     // since order_by = name is the default, that should be strip out of the search
     expect(history.location.search).toEqual('');
+  });
+
+  test('should test clear all', () => {
+    const query = '?item.page_size=5&item.name=foo';
+    const history = createMemoryHistory({
+      initialEntries: [`/organizations/1/teams${query}`],
+    });
+    const wrapper = mountWithContexts(
+      <ListHeader
+        itemCount={7}
+        qsConfig={qsConfig}
+        searchColumns={[{ name: 'foo', key: 'foo', isDefault: true }]}
+        sortColumns={[{ name: 'foo', key: 'foo' }]}
+      />,
+      { context: { router: { history } } }
+    );
+
+    expect(history.location.search).toEqual(query);
+    const toolbar = wrapper.find('DataListToolbar');
+    toolbar.prop('clearAllFilters')();
+    expect(history.location.search).toEqual('?item.page_size=5');
+  });
+
+  test('should test handle search', () => {
+    const query = '?item.page_size=10';
+    const history = createMemoryHistory({
+      initialEntries: [`/organizations/1/teams${query}`],
+    });
+    const wrapper = mountWithContexts(
+      <ListHeader
+        itemCount={7}
+        qsConfig={qsConfig}
+        searchColumns={[{ name: 'foo', key: 'foo', isDefault: true }]}
+        sortColumns={[{ name: 'foo', key: 'foo' }]}
+      />,
+      { context: { router: { history } } }
+    );
+
+    expect(history.location.search).toEqual(query);
+    const toolbar = wrapper.find('DataListToolbar');
+    toolbar.prop('onSearch')('name__icontains', 'foo');
+    expect(history.location.search).toEqual(
+      '?item.name__icontains=foo&item.page_size=10'
+    );
+  });
+
+  test('should test handle remove', () => {
+    const query = '?item.name__icontains=foo&item.page_size=10';
+    const history = createMemoryHistory({
+      initialEntries: [`/organizations/1/teams${query}`],
+    });
+    const wrapper = mountWithContexts(
+      <ListHeader
+        itemCount={7}
+        qsConfig={qsConfig}
+        searchColumns={[{ name: 'foo', key: 'foo', isDefault: true }]}
+        sortColumns={[{ name: 'foo', key: 'foo' }]}
+      />,
+      { context: { router: { history } } }
+    );
+
+    expect(history.location.search).toEqual(query);
+    const toolbar = wrapper.find('DataListToolbar');
+    toolbar.prop('onRemove')('name__icontains', 'foo');
+    expect(history.location.search).toEqual('?item.page_size=10');
   });
 });

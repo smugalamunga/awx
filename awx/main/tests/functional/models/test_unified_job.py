@@ -13,6 +13,7 @@ from awx.main.models import (
     WorkflowApprovalTemplate, Project, WorkflowJob, Schedule,
     Credential
 )
+from awx.api.versioning import reverse
 
 
 @pytest.mark.django_db
@@ -24,6 +25,29 @@ def test_subclass_types(rando):
         ContentType.objects.get_for_model(WorkflowApprovalTemplate).id
 
     ])
+
+
+@pytest.mark.django_db
+def test_soft_unique_together(post, project, admin_user):
+    """This tests that SOFT_UNIQUE_TOGETHER restrictions are applied correctly.
+    """
+    jt1 = JobTemplate.objects.create(
+        name='foo_jt',
+        project=project
+    )
+    assert jt1.organization == project.organization
+    r = post(
+        url=reverse('api:job_template_list'),
+        data=dict(
+            name='foo_jt',  # same as first
+            project=project.id,
+            ask_inventory_on_launch=True,
+            playbook='helloworld.yml'
+        ),
+        user=admin_user,
+        expect=400
+    )
+    assert 'combination already exists' in str(r.data)
 
 
 @pytest.mark.django_db
@@ -281,15 +305,18 @@ class TestTaskImpact:
             return job
         return r
 
-    def test_limit_task_impact(self, job_host_limit):
+    def test_limit_task_impact(self, job_host_limit, run_computed_fields_right_away):
         job = job_host_limit(5, 2)
+        job.inventory.update_computed_fields()
+        assert job.inventory.total_hosts == 5
         assert job.task_impact == 2 + 1  # forks becomes constraint
 
-    def test_host_task_impact(self, job_host_limit):
+    def test_host_task_impact(self, job_host_limit, run_computed_fields_right_away):
         job = job_host_limit(3, 5)
+        job.inventory.update_computed_fields()
         assert job.task_impact == 3 + 1  # hosts becomes constraint
 
-    def test_shard_task_impact(self, slice_job_factory):
+    def test_shard_task_impact(self, slice_job_factory, run_computed_fields_right_away):
         # factory creates on host per slice
         workflow_job = slice_job_factory(3, jt_kwargs={'forks': 50}, spawn=True)
         # arrange the jobs by their number
@@ -301,6 +328,7 @@ class TestTaskImpact:
             len(jobs[0].inventory.get_script_data(slice_number=i + 1, slice_count=3)['all']['hosts'])
             for i in range(3)
         ] == [1, 1, 1]
+        jobs[0].inventory.update_computed_fields()
         assert [job.task_impact for job in jobs] == [2, 2, 2]  # plus one base task impact
         # Uneven distribution - first job takes the extra host
         jobs[0].inventory.hosts.create(name='remainder_foo')
@@ -308,4 +336,5 @@ class TestTaskImpact:
             len(jobs[0].inventory.get_script_data(slice_number=i + 1, slice_count=3)['all']['hosts'])
             for i in range(3)
         ] == [2, 1, 1]
+        jobs[0].inventory.update_computed_fields()
         assert [job.task_impact for job in jobs] == [3, 2, 2]

@@ -1,24 +1,24 @@
-import React from 'react';
-import { Link, withRouter } from 'react-router-dom';
+import React, { useCallback } from 'react';
+import { Link, useHistory } from 'react-router-dom';
 import { withI18n } from '@lingui/react';
 import { t } from '@lingui/macro';
-import styled from 'styled-components';
-import { Project } from '@types';
-import { formatDateString } from '@util/dates';
-import { Config } from '@contexts/Config';
-import { Button, CardBody, List, ListItem } from '@patternfly/react-core';
-import { DetailList, Detail } from '@components/DetailList';
-import { CredentialChip } from '@components/Chip';
-import { toTitleCase } from '@util/strings';
+import { Button, List, ListItem } from '@patternfly/react-core';
+import { Project } from '../../../types';
+import { Config } from '../../../contexts/Config';
 
-const ActionButtonWrapper = styled.div`
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 20px;
-  & > :not(:first-child) {
-    margin-left: 20px;
-  }
-`;
+import AlertModal from '../../../components/AlertModal';
+import { CardBody, CardActionsRow } from '../../../components/Card';
+import DeleteButton from '../../../components/DeleteButton';
+import {
+  DetailList,
+  Detail,
+  UserDateDetail,
+} from '../../../components/DetailList';
+import ErrorDetail from '../../../components/ErrorDetail';
+import CredentialChip from '../../../components/CredentialChip';
+import { ProjectsAPI } from '../../../api';
+import { toTitleCase } from '../../../util/strings';
+import useRequest, { useDismissableError } from '../../../util/useRequest';
 
 function ProjectDetail({ project, i18n }) {
   const {
@@ -40,6 +40,16 @@ function ProjectDetail({ project, i18n }) {
     scm_url,
     summary_fields,
   } = project;
+  const history = useHistory();
+
+  const { request: deleteProject, isLoading, error: deleteError } = useRequest(
+    useCallback(async () => {
+      await ProjectsAPI.destroy(id);
+      history.push(`/projects`);
+    }, [id, history])
+  );
+
+  const { error, dismissError } = useDismissableError(deleteError);
 
   let optionsList = '';
   if (
@@ -64,34 +74,14 @@ function ProjectDetail({ project, i18n }) {
     );
   }
 
-  let createdBy = '';
-  if (created) {
-    if (summary_fields.created_by && summary_fields.created_by.username) {
-      createdBy = i18n._(
-        t`${formatDateString(created)} by ${summary_fields.created_by.username}`
-      );
-    } else {
-      createdBy = formatDateString(created);
-    }
-  }
-
-  let modifiedBy = '';
-  if (modified) {
-    if (summary_fields.modified_by && summary_fields.modified_by.username) {
-      modifiedBy = i18n._(
-        t`${formatDateString(modified)} by ${
-          summary_fields.modified_by.username
-        }`
-      );
-    } else {
-      modifiedBy = formatDateString(modified);
-    }
-  }
-
   return (
-    <CardBody css="padding-top: 20px">
+    <CardBody>
       <DetailList gutter="sm">
-        <Detail label={i18n._(t`Name`)} value={name} />
+        <Detail
+          label={i18n._(t`Name`)}
+          value={name}
+          dataCy="project-detail-name"
+        />
         <Detail label={i18n._(t`Description`)} value={description} />
         {summary_fields.organization && (
           <Detail
@@ -106,17 +96,17 @@ function ProjectDetail({ project, i18n }) {
           />
         )}
         <Detail
-          label={i18n._(t`SCM Type`)}
+          label={i18n._(t`Source Control Type`)}
           value={
             scm_type === '' ? i18n._(t`Manual`) : toTitleCase(project.scm_type)
           }
         />
-        <Detail label={i18n._(t`SCM URL`)} value={scm_url} />
-        <Detail label={i18n._(t`SCM Branch`)} value={scm_branch} />
-        <Detail label={i18n._(t`SCM Refspec`)} value={scm_refspec} />
+        <Detail label={i18n._(t`Source Control URL`)} value={scm_url} />
+        <Detail label={i18n._(t`Source Control Branch`)} value={scm_branch} />
+        <Detail label={i18n._(t`Source Control Refspec`)} value={scm_refspec} />
         {summary_fields.credential && (
           <Detail
-            label={i18n._(t`SCM Credential`)}
+            label={i18n._(t`Source Control Credential`)}
             value={
               <CredentialChip
                 key={summary_fields.credential.id}
@@ -146,12 +136,18 @@ function ProjectDetail({ project, i18n }) {
           )}
         </Config>
         <Detail label={i18n._(t`Playbook Directory`)} value={local_path} />
-        {/* TODO: Link to user in users */}
-        <Detail label={i18n._(t`Created`)} value={createdBy} />
-        {/* TODO: Link to user in users */}
-        <Detail label={i18n._(t`Last Modified`)} value={modifiedBy} />
+        <UserDateDetail
+          label={i18n._(t`Created`)}
+          date={created}
+          user={summary_fields.created_by}
+        />
+        <UserDateDetail
+          label={i18n._(t`Last Modified`)}
+          date={modified}
+          user={summary_fields.modified_by}
+        />
       </DetailList>
-      <ActionButtonWrapper>
+      <CardActionsRow>
         {summary_fields.user_capabilities &&
           summary_fields.user_capabilities.edit && (
             <Button
@@ -162,7 +158,30 @@ function ProjectDetail({ project, i18n }) {
               {i18n._(t`Edit`)}
             </Button>
           )}
-      </ActionButtonWrapper>
+        {summary_fields.user_capabilities &&
+          summary_fields.user_capabilities.delete && (
+            <DeleteButton
+              name={name}
+              modalTitle={i18n._(t`Delete Project`)}
+              onConfirm={deleteProject}
+              isDisabled={isLoading}
+            >
+              {i18n._(t`Delete`)}
+            </DeleteButton>
+          )}
+      </CardActionsRow>
+      {/* Update delete modal to show dependencies https://github.com/ansible/awx/issues/5546 */}
+      {error && (
+        <AlertModal
+          isOpen={error}
+          variant="error"
+          title={i18n._(t`Error!`)}
+          onClose={dismissError}
+        >
+          {i18n._(t`Failed to delete project.`)}
+          <ErrorDetail error={error} />
+        </AlertModal>
+      )}
     </CardBody>
   );
 }
@@ -171,4 +190,4 @@ ProjectDetail.propTypes = {
   project: Project.isRequired,
 };
 
-export default withI18n()(withRouter(ProjectDetail));
+export default withI18n()(ProjectDetail);

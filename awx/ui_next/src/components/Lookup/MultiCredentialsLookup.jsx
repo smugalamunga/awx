@@ -1,146 +1,203 @@
-import React from 'react';
+import 'styled-components/macro';
+import React, { Fragment, useState, useCallback, useEffect } from 'react';
+import { withRouter } from 'react-router-dom';
 import PropTypes from 'prop-types';
 import { withI18n } from '@lingui/react';
 import { t } from '@lingui/macro';
-import { FormGroup, Tooltip } from '@patternfly/react-core';
-import { QuestionCircleIcon as PFQuestionCircleIcon } from '@patternfly/react-icons';
-import styled from 'styled-components';
+import { ToolbarItem, Alert } from '@patternfly/react-core';
+import { CredentialsAPI, CredentialTypesAPI } from '../../api';
+import AnsibleSelect from '../AnsibleSelect';
+import CredentialChip from '../CredentialChip';
+import OptionsList from '../OptionsList';
+import useRequest from '../../util/useRequest';
+import { getQSConfig, parseQueryString } from '../../util/qs';
+import Lookup from './Lookup';
 
-import { CredentialsAPI, CredentialTypesAPI } from '@api';
-import Lookup from '@components/Lookup';
+const QS_CONFIG = getQSConfig('credentials', {
+  page: 1,
+  page_size: 5,
+  order_by: 'name',
+});
 
-const QuestionCircleIcon = styled(PFQuestionCircleIcon)`
-  margin-left: 10px;
-`;
+async function loadCredentials(params, selectedCredentialTypeId) {
+  params.credential_type = selectedCredentialTypeId || 1;
+  const { data } = await CredentialsAPI.read(params);
+  return data;
+}
 
-class MultiCredentialsLookup extends React.Component {
-  constructor(props) {
-    super(props);
+function MultiCredentialsLookup(props) {
+  const { value, onChange, onError, history, i18n } = props;
+  const [selectedType, setSelectedType] = useState(null);
 
-    this.state = {
-      selectedCredentialType: { label: 'Machine', id: 1, kind: 'ssh' },
-      credentialTypes: [],
-    };
-    this.loadCredentialTypes = this.loadCredentialTypes.bind(this);
-    this.handleCredentialTypeSelect = this.handleCredentialTypeSelect.bind(
-      this
-    );
-    this.loadCredentials = this.loadCredentials.bind(this);
-    this.toggleCredentialSelection = this.toggleCredentialSelection.bind(this);
-  }
+  const {
+    result: credentialTypes,
+    request: fetchTypes,
+    error: typesError,
+    isLoading: isTypesLoading,
+  } = useRequest(
+    useCallback(async () => {
+      const types = await CredentialTypesAPI.loadAllTypes();
+      const match = types.find(type => type.kind === 'ssh') || types[0];
+      setSelectedType(match);
+      return types;
+    }, []),
+    []
+  );
 
-  componentDidMount() {
-    this.loadCredentialTypes();
-  }
+  useEffect(() => {
+    fetchTypes();
+  }, [fetchTypes]);
 
-  async loadCredentialTypes() {
-    const { onError } = this.props;
-    try {
-      const { data } = await CredentialTypesAPI.read();
-      const acceptableTypes = ['machine', 'cloud', 'net', 'ssh', 'vault'];
-      const credentialTypes = [];
-      data.results.forEach(cred => {
-        acceptableTypes.forEach(aT => {
-          if (aT === cred.kind) {
-            // This object has several repeated values as some of it's children
-            // require different field values.
-            cred = {
-              id: cred.id,
-              key: cred.id,
-              kind: cred.kind,
-              type: cred.namespace,
-              value: cred.name,
-              label: cred.name,
-              isDisabled: false,
-            };
-            credentialTypes.push(cred);
-          }
-        });
-      });
-      this.setState({ credentialTypes });
-    } catch (err) {
-      onError(err);
+  const {
+    result: { credentials, credentialsCount },
+    request: fetchCredentials,
+    error: credentialsError,
+    isLoading: isCredentialsLoading,
+  } = useRequest(
+    useCallback(async () => {
+      if (!selectedType) {
+        return {
+          credentials: [],
+          count: 0,
+        };
+      }
+      const params = parseQueryString(QS_CONFIG, history.location.search);
+      const { results, count } = await loadCredentials(params, selectedType.id);
+      return {
+        credentials: results,
+        credentialsCount: count,
+      };
+    }, [selectedType, history.location]),
+    {
+      credentials: [],
+      credentialsCount: 0,
     }
-  }
+  );
 
-  async loadCredentials(params) {
-    const { selectedCredentialType } = this.state;
-    params.credential_type = selectedCredentialType.id || 1;
-    return CredentialsAPI.read(params);
-  }
+  useEffect(() => {
+    fetchCredentials();
+  }, [fetchCredentials]);
 
-  toggleCredentialSelection(newCredential) {
-    const { onChange, credentials: credentialsToUpdate } = this.props;
-
-    let newCredentialsList;
-    const isSelectedCredentialInState =
-      credentialsToUpdate.filter(cred => cred.id === newCredential.id).length >
-      0;
-
-    if (isSelectedCredentialInState) {
-      newCredentialsList = credentialsToUpdate.filter(
-        cred => cred.id !== newCredential.id
-      );
-    } else {
-      newCredentialsList = credentialsToUpdate.filter(
-        credential =>
-          credential.kind === 'vault' || credential.kind !== newCredential.kind
-      );
-      newCredentialsList = [...newCredentialsList, newCredential];
+  useEffect(() => {
+    if (typesError || credentialsError) {
+      onError(typesError || credentialsError);
     }
-    onChange(newCredentialsList);
-  }
+  }, [typesError, credentialsError, onError]);
 
-  handleCredentialTypeSelect(value, type) {
-    const { credentialTypes } = this.state;
-    const selectedType = credentialTypes.filter(item => item.label === type);
-    this.setState({ selectedCredentialType: selectedType[0] });
-  }
+  const renderChip = ({ item, removeItem, canDelete }) => (
+    <CredentialChip
+      key={item.id}
+      onClick={() => removeItem(item)}
+      isReadOnly={!canDelete}
+      credential={item}
+    />
+  );
 
-  render() {
-    const { selectedCredentialType, credentialTypes } = this.state;
-    const { tooltip, i18n, credentials } = this.props;
-    return (
-      <FormGroup label={i18n._(t`Credentials`)} fieldId="multiCredential">
-        {tooltip && (
-          <Tooltip position="right" content={tooltip}>
-            <QuestionCircleIcon />
-          </Tooltip>
-        )}
-        {credentialTypes && (
-          <Lookup
-            selectCategoryOptions={credentialTypes}
-            selectCategory={this.handleCredentialTypeSelect}
-            selectedCategory={selectedCredentialType}
-            onToggleItem={this.toggleCredentialSelection}
-            onloadCategories={this.loadCredentialTypes}
-            id="multiCredential"
-            lookupHeader={i18n._(t`Credentials`)}
-            name="credentials"
-            value={credentials}
-            multiple
-            onLookupSave={() => {}}
-            getItems={this.loadCredentials}
-            qsNamespace="credentials"
-            columns={[
-              {
-                name: i18n._(t`Name`),
-                key: 'name',
-                isSortable: true,
-                isSearchable: true,
-              },
-            ]}
-            sortedColumnKey="name"
-          />
-        )}
-      </FormGroup>
-    );
-  }
+  const isVault = selectedType?.kind === 'vault';
+
+  return (
+    <Lookup
+      id="multiCredential"
+      header={i18n._(t`Credentials`)}
+      value={value}
+      multiple
+      onChange={onChange}
+      qsConfig={QS_CONFIG}
+      isLoading={isTypesLoading || isCredentialsLoading}
+      renderItemChip={renderChip}
+      renderOptionsList={({ state, dispatch, canDelete }) => {
+        return (
+          <Fragment>
+            {isVault && (
+              <Alert
+                variant="info"
+                isInline
+                css="margin-bottom: 20px;"
+                title={i18n._(
+                  t`You cannot select multiple vault credentials with the same vault ID. Doing so will automatically deselect the other with the same vault ID.`
+                )}
+              />
+            )}
+            {credentialTypes && credentialTypes.length > 0 && (
+              <ToolbarItem css=" display: flex; align-items: center;">
+                <div css="flex: 0 0 25%; margin-right: 32px">
+                  {i18n._(t`Selected Category`)}
+                </div>
+                <AnsibleSelect
+                  css="flex: 1 1 75%;"
+                  id="multiCredentialsLookUp-select"
+                  label={i18n._(t`Selected Category`)}
+                  data={credentialTypes.map(type => ({
+                    key: type.id,
+                    value: type.id,
+                    label: type.name,
+                    isDisabled: false,
+                  }))}
+                  value={selectedType && selectedType.id}
+                  onChange={(e, id) => {
+                    setSelectedType(
+                      credentialTypes.find(o => o.id === parseInt(id, 10))
+                    );
+                  }}
+                />
+              </ToolbarItem>
+            )}
+            <OptionsList
+              value={state.selectedItems}
+              options={credentials}
+              optionCount={credentialsCount}
+              searchColumns={[
+                {
+                  name: i18n._(t`Name`),
+                  key: 'name',
+                  isDefault: true,
+                },
+                {
+                  name: i18n._(t`Created By (Username)`),
+                  key: 'created_by__username',
+                },
+                {
+                  name: i18n._(t`Modified By (Username)`),
+                  key: 'modified_by__username',
+                },
+              ]}
+              sortColumns={[
+                {
+                  name: i18n._(t`Name`),
+                  key: 'name',
+                },
+              ]}
+              multiple={isVault}
+              header={i18n._(t`Credentials`)}
+              name="credentials"
+              qsConfig={QS_CONFIG}
+              readOnly={!canDelete}
+              selectItem={item => {
+                const hasSameVaultID = val =>
+                  val?.inputs?.vault_id !== undefined &&
+                  val?.inputs?.vault_id === item?.inputs?.vault_id;
+                const hasSameKind = val => val.kind === item.kind;
+                const selectedItems = state.selectedItems.filter(i =>
+                  isVault ? !hasSameVaultID(i) : !hasSameKind(i)
+                );
+                selectedItems.push(item);
+                return dispatch({
+                  type: 'SET_SELECTED_ITEMS',
+                  selectedItems,
+                });
+              }}
+              deselectItem={item => dispatch({ type: 'DESELECT_ITEM', item })}
+              renderItemChip={renderChip}
+            />
+          </Fragment>
+        );
+      }}
+    />
+  );
 }
 
 MultiCredentialsLookup.propTypes = {
-  tooltip: PropTypes.string,
-  credentials: PropTypes.arrayOf(
+  value: PropTypes.arrayOf(
     PropTypes.shape({
       id: PropTypes.number,
       name: PropTypes.string,
@@ -154,9 +211,8 @@ MultiCredentialsLookup.propTypes = {
 };
 
 MultiCredentialsLookup.defaultProps = {
-  tooltip: '',
-  credentials: [],
+  value: [],
 };
-export { MultiCredentialsLookup as _MultiCredentialsLookup };
 
-export default withI18n()(MultiCredentialsLookup);
+export { MultiCredentialsLookup as _MultiCredentialsLookup };
+export default withI18n()(withRouter(MultiCredentialsLookup));

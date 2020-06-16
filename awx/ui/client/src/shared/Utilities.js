@@ -212,7 +212,11 @@ angular.module('Utilities', ['RestServices', 'Utilities'])
                         }
                     } else {
                         if (data[fld]) {
-                            scope[fld + '_api_error'] = data[fld][0];
+                            if (data[fld].message) {
+                                scope[fld + '_api_error'] = data[fld].message;
+                            } else {
+                                scope[fld + '_api_error'] = data[fld][0];
+                            }
                             $('[name="' + fld + '"]').addClass('ng-invalid');
                             $('label[for="' + fld + '"] span').addClass('error-color');
                             $('html, body').animate({scrollTop: $('[name="' + fld + '"]').offset().top}, 0);
@@ -233,7 +237,7 @@ angular.module('Utilities', ['RestServices', 'Utilities'])
                         addApiErrors(form.fields[field], field);
                     }
                 }
-                if (defaultMsg) {
+                if (!fieldErrors && defaultMsg) {
                     Alert(defaultMsg.hdr, defaultMsg.msg);
                 }
             } else if (typeof data === 'object' && data !== null) {

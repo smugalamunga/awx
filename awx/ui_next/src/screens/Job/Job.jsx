@@ -2,27 +2,18 @@ import React, { Component } from 'react';
 import { Route, withRouter, Switch, Redirect, Link } from 'react-router-dom';
 import { withI18n } from '@lingui/react';
 import { t } from '@lingui/macro';
-import styled from 'styled-components';
-import {
-  Card,
-  CardHeader as PFCardHeader,
-  PageSection,
-} from '@patternfly/react-core';
-import { JobsAPI } from '@api';
-import ContentError from '@components/ContentError';
-import CardCloseButton from '@components/CardCloseButton';
-import RoutedTabs from '@components/RoutedTabs';
+import { Card, CardActions, PageSection } from '@patternfly/react-core';
+import { JobsAPI } from '../../api';
+import { TabbedCardHeader } from '../../components/Card';
+import ContentError from '../../components/ContentError';
+import CardCloseButton from '../../components/CardCloseButton';
+import RoutedTabs from '../../components/RoutedTabs';
 
 import JobDetail from './JobDetail';
 import JobOutput from './JobOutput';
+import WorkflowDetail from './WorkflowDetail';
+import { WorkflowOutput } from './WorkflowOutput';
 import { JOB_TYPE_URL_SEGMENTS } from '../../constants';
-
-const CardHeader = styled(PFCardHeader)`
-  --pf-c-card--first-child--PaddingTop: 0;
-  --pf-c-card--child--PaddingLeft: 0;
-  --pf-c-card--child--PaddingRight: 0;
-  position: relative;
-`;
 
 class Job extends Component {
   constructor(props) {
@@ -67,7 +58,7 @@ class Job extends Component {
   }
 
   render() {
-    const { history, match, i18n, lookup } = this.props;
+    const { match, i18n, lookup } = this.props;
 
     const { job, contentError, hasContentLoading, isInitialized } = this.state;
     let jobType;
@@ -76,29 +67,27 @@ class Job extends Component {
     }
 
     const tabsArray = [
-      { name: i18n._(t`Output`), link: `${match.url}/output`, id: 0 },
-      { name: i18n._(t`Details`), link: `${match.url}/details`, id: 1 },
+      { name: i18n._(t`Details`), link: `${match.url}/details`, id: 0 },
+      { name: i18n._(t`Output`), link: `${match.url}/output`, id: 1 },
     ];
 
     let cardHeader = (
-      <CardHeader>
-        <RoutedTabs match={match} history={history} tabsArray={tabsArray} />
-        <CardCloseButton linkTo="/jobs" />
-      </CardHeader>
+      <TabbedCardHeader>
+        <RoutedTabs tabsArray={tabsArray} />
+        <CardActions>
+          <CardCloseButton linkTo="/jobs" />
+        </CardActions>
+      </TabbedCardHeader>
     );
 
     if (!isInitialized) {
       cardHeader = null;
     }
 
-    if (!match) {
-      cardHeader = null;
-    }
-
     if (!hasContentLoading && contentError) {
       return (
         <PageSection>
-          <Card className="awx-c-card">
+          <Card>
             <ContentError error={contentError}>
               {contentError.response.status === 404 && (
                 <span>
@@ -115,7 +104,7 @@ class Job extends Component {
     if (lookup && job) {
       return (
         <Switch>
-          <Redirect from="jobs/:id" to={`/jobs/${jobType}/:id/details`} />
+          <Redirect from="jobs/:id" to={`/jobs/${jobType}/:id/output`} />
           <Redirect
             from="jobs/:id/details"
             to={`/jobs/${jobType}/:id/details`}
@@ -135,22 +124,25 @@ class Job extends Component {
               to="/jobs/:type/:id/output"
               exact
             />
-            {job && [
-              <Route
-                key="details"
-                path="/jobs/:type/:id/details"
-                render={() => <JobDetail type={match.params.type} job={job} />}
-              />,
-              <Route
-                key="output"
-                path="/jobs/:type/:id/output"
-                render={() => <JobOutput type={match.params.type} job={job} />}
-              />,
-              <Route
-                key="not-found"
-                path="*"
-                render={() =>
-                  !hasContentLoading && (
+            {job &&
+              job.type === 'workflow_job' && [
+                <Route key="workflow-details" path="/jobs/workflow/:id/details">
+                  <WorkflowDetail job={job} />
+                </Route>,
+                <Route key="workflow-output" path="/jobs/workflow/:id/output">
+                  <WorkflowOutput job={job} />
+                </Route>,
+              ]}
+            {job &&
+              job.type !== 'workflow_job' && [
+                <Route key="details" path="/jobs/:type/:id/details">
+                  <JobDetail type={match.params.type} job={job} />
+                </Route>,
+                <Route key="output" path="/jobs/:type/:id/output">
+                  <JobOutput type={match.params.type} job={job} />
+                </Route>,
+                <Route key="not-found" path="*">
+                  {!hasContentLoading && (
                     <ContentError isNotFound>
                       <Link
                         to={`/jobs/${match.params.type}/${match.params.id}/details`}
@@ -158,10 +150,9 @@ class Job extends Component {
                         {i18n._(`View Job Details`)}
                       </Link>
                     </ContentError>
-                  )
-                }
-              />,
-            ]}
+                  )}
+                </Route>,
+              ]}
           </Switch>
         </Card>
       </PageSection>

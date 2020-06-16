@@ -47,7 +47,12 @@ http {
     {%endif %}
 
     server {
-        {% if ssl_certificate is defined %}
+        {% if (ssl_certificate is defined) and (ssl_certificate_key is defined) %}
+        listen 8053 ssl;
+
+        ssl_certificate /etc/nginx/awxweb.pem;
+        ssl_certificate_key /etc/nginx/awxweb_key.pem;
+        {% elif (ssl_certificate is defined) and (ssl_certificate_key is not defined) %}
         listen 8053 ssl;
 
         ssl_certificate /etc/nginx/awxweb.pem;
@@ -113,6 +118,7 @@ http {
             include {{ extra_nginx_include }};
             {%- endif %}
             proxy_set_header X-Forwarded-Port 443;
+            uwsgi_param HTTP_X_FORWARDED_PORT 443;
         }
     }
 }

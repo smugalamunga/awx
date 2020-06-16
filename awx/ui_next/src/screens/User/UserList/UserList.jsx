@@ -4,15 +4,15 @@ import { withI18n } from '@lingui/react';
 import { t } from '@lingui/macro';
 import { Card, PageSection } from '@patternfly/react-core';
 
-import { UsersAPI } from '@api';
-import AlertModal from '@components/AlertModal';
-import DataListToolbar from '@components/DataListToolbar';
-import ErrorDetail from '@components/ErrorDetail';
+import { UsersAPI } from '../../../api';
+import AlertModal from '../../../components/AlertModal';
+import DataListToolbar from '../../../components/DataListToolbar';
+import ErrorDetail from '../../../components/ErrorDetail';
 import PaginatedDataList, {
   ToolbarAddButton,
   ToolbarDeleteButton,
-} from '@components/PaginatedDataList';
-import { getQSConfig, parseQueryString } from '@util/qs';
+} from '../../../components/PaginatedDataList';
+import { getQSConfig, parseQueryString } from '../../../util/qs';
 
 import UserListItem from './UserListItem';
 
@@ -151,26 +151,36 @@ class UsersList extends Component {
               hasContentLoading={hasContentLoading}
               items={users}
               itemCount={itemCount}
-              pluralizedItemName="Users"
+              pluralizedItemName={i18n._(t`Users`)}
               qsConfig={QS_CONFIG}
-              toolbarColumns={[
+              onRowClick={this.handleSelect}
+              toolbarSearchColumns={[
                 {
                   name: i18n._(t`Username`),
                   key: 'username',
-                  isSortable: true,
-                  isSearchable: true,
+                  isDefault: true,
                 },
                 {
                   name: i18n._(t`First Name`),
                   key: 'first_name',
-                  isSortable: true,
-                  isSearchable: true,
                 },
                 {
                   name: i18n._(t`Last Name`),
                   key: 'last_name',
-                  isSortable: true,
-                  isSearchable: true,
+                },
+              ]}
+              toolbarSortColumns={[
+                {
+                  name: i18n._(t`Username`),
+                  key: 'username',
+                },
+                {
+                  name: i18n._(t`First Name`),
+                  key: 'first_name',
+                },
+                {
+                  name: i18n._(t`Last Name`),
+                  key: 'last_name',
                 },
               ]}
               renderToolbar={props => (
@@ -181,15 +191,20 @@ class UsersList extends Component {
                   onSelectAll={this.handleSelectAll}
                   qsConfig={QS_CONFIG}
                   additionalControls={[
+                    ...(canAdd
+                      ? [
+                          <ToolbarAddButton
+                            key="add"
+                            linkTo={`${match.url}/add`}
+                          />,
+                        ]
+                      : []),
                     <ToolbarDeleteButton
                       key="delete"
                       onDelete={this.handleUserDelete}
                       itemsToDelete={selected}
                       pluralizedItemName="Users"
                     />,
-                    canAdd ? (
-                      <ToolbarAddButton key="add" linkTo={`${match.url}/add`} />
-                    ) : null,
                   ]}
                 />
               )}
@@ -197,7 +212,7 @@ class UsersList extends Component {
                 <UserListItem
                   key={o.id}
                   user={o}
-                  detailUrl={`${match.url}/${o.id}`}
+                  detailUrl={`${match.url}/${o.id}/details`}
                   isSelected={selected.some(row => row.id === o.id)}
                   onSelect={() => this.handleSelect(o)}
                 />
@@ -212,7 +227,7 @@ class UsersList extends Component {
         </PageSection>
         <AlertModal
           isOpen={deletionError}
-          variant="danger"
+          variant="error"
           title={i18n._(t`Error!`)}
           onClose={this.handleDeleteErrorClose}
         >

@@ -4,40 +4,43 @@ import {
   DataListItem,
   DataListItemRow,
   DataListItemCells,
-  DataListCell,
+  DataListCheck,
+  Radio,
 } from '@patternfly/react-core';
-import DataListCheck from '@components/DataListCheck';
-import DataListRadio from '@components/DataListRadio';
-import VerticalSeparator from '../VerticalSeparator';
+import DataListCell from '../DataListCell';
 
 const CheckboxListItem = ({
+  isDisabled = false,
+  isRadio = false,
+  isSelected = false,
   itemId,
-  name,
   label,
-  isSelected,
+  name,
+  onDeselect,
   onSelect,
-  isRadio,
 }) => {
-  const CheckboxRadio = isRadio ? DataListRadio : DataListCheck;
+  const CheckboxRadio = isRadio ? Radio : DataListCheck;
+
   return (
-    <DataListItem key={itemId} aria-labelledby={`check-action-item-${itemId}`}>
+    <DataListItem
+      key={itemId}
+      aria-labelledby={`check-action-item-${itemId}`}
+      id={`${itemId}`}
+    >
       <DataListItemRow>
         <CheckboxRadio
-          id={`selected-${itemId}`}
-          checked={isSelected}
-          onChange={onSelect}
+          aria-label={`check-action-item-${itemId}`}
           aria-labelledby={`check-action-item-${itemId}`}
+          checked={isSelected}
+          disabled={isDisabled}
+          id={`selected-${itemId}`}
+          isChecked={isSelected}
           name={name}
+          onChange={isSelected ? onDeselect : onSelect}
           value={itemId}
         />
         <DataListItemCells
           dataListCells={[
-            <DataListCell
-              key="divider"
-              className="pf-c-data-list__cell--divider"
-            >
-              <VerticalSeparator />
-            </DataListCell>,
             <DataListCell key="name">
               <label
                 id={`check-action-item-${itemId}`}
@@ -55,10 +58,11 @@ const CheckboxListItem = ({
 };
 
 CheckboxListItem.propTypes = {
-  itemId: PropTypes.number.isRequired,
-  name: PropTypes.string.isRequired,
-  label: PropTypes.string.isRequired,
   isSelected: PropTypes.bool.isRequired,
+  itemId: PropTypes.number.isRequired,
+  label: PropTypes.string.isRequired,
+  name: PropTypes.string.isRequired,
+  onDeselect: PropTypes.func.isRequired,
   onSelect: PropTypes.func.isRequired,
 };
 

@@ -4,10 +4,10 @@ import {
   DataListItem,
   DataListItemRow,
   DataListItemCells,
-  DataListCell,
   TextContent,
 } from '@patternfly/react-core';
 import styled from 'styled-components';
+import DataListCell from '../DataListCell';
 
 const DetailWrapper = styled(TextContent)`
   display: grid;
@@ -19,11 +19,15 @@ const DetailWrapper = styled(TextContent)`
 
 export default function PaginatedDataListItem({ item }) {
   return (
-    <DataListItem aria-labelledby={`items-list-item-${item.id}`} key={item.id}>
+    <DataListItem
+      aria-labelledby={`items-list-item-${item.id}`}
+      key={item.id}
+      id={`${item.id}`}
+    >
       <DataListItemRow>
         <DataListItemCells
           dataListCells={[
-            <DataListCell key="team-name">
+            <DataListCell key="name">
               <DetailWrapper>
                 <Link to={{ pathname: item.url }}>
                   <b id={`items-list-item-${item.id}`}>{item.name}</b>

@@ -4,12 +4,10 @@
  * All Rights Reserved
  *************************************************/
  export default
-    ['$scope', '$rootScope', '$state', '$stateParams', 'HostsRelatedGroupsList', 'InventoryUpdate',
-    'CancelSourceUpdate', 'rbacUiControlService', 'GetBasePath',
-    'GetHostsStatusMsg', 'Dataset', 'Find', 'QuerySet', 'inventoryData', 'host', 'GroupsService',
-    function($scope, $rootScope, $state, $stateParams, HostsRelatedGroupsList, InventoryUpdate,
-        CancelSourceUpdate, rbacUiControlService, GetBasePath,
-        GetHostsStatusMsg, Dataset, Find, qs, inventoryData, host, GroupsService){
+    ['$scope', '$rootScope', '$state', '$stateParams', 'HostsRelatedGroupsList', 'InventoryHostsStrings',
+    'CancelSourceUpdate', 'rbacUiControlService', 'GetBasePath', 'Dataset', 'Find', 'QuerySet', 'inventoryData', 'host', 'GroupsService',
+    function($scope, $rootScope, $state, $stateParams, HostsRelatedGroupsList, InventoryHostsStrings,
+        CancelSourceUpdate, rbacUiControlService, GetBasePath, Dataset, Find, qs, inventoryData, host, GroupsService){
 
         let list = HostsRelatedGroupsList;
 
@@ -18,6 +16,7 @@
         function init(){
             $scope.inventory_id = inventoryData.id;
             $scope.canAdd = false;
+            $scope.strings = InventoryHostsStrings;
 
             rbacUiControlService.canAdd(GetBasePath('inventory') + $scope.inventory_id + "/groups")
                 .then(function(canAdd) {
@@ -29,27 +28,6 @@
             $scope[`${list.iterator}_dataset`] = Dataset.data;
             $scope[list.name] = $scope[`${list.iterator}_dataset`].results;
 
-            $scope.$watchCollection(list.name, function(){
-                _.forEach($scope[list.name], buildStatusIndicators);
-            });
-        }
-
-        function buildStatusIndicators(group){
-            if (group === undefined || group === null) {
-                group = {};
-            }
-
-            let hosts_status;
-
-            hosts_status = GetHostsStatusMsg({
-                active_failures: group.hosts_with_active_failures,
-                total_hosts: group.total_hosts,
-                inventory_id: $scope.inventory_id,
-                group_id: group.id
-            });
-            _.assign(group,
-                {hosts_status_tip: hosts_status.tooltip},
-                {hosts_status_class: hosts_status.class});
         }
 
         $scope.editGroup = function(id){

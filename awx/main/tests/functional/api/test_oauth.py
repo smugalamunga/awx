@@ -1,6 +1,8 @@
-import pytest
 import base64
 import json
+import time
+
+import pytest
 
 from django.db import connection
 from django.test.utils import override_settings
@@ -10,6 +12,7 @@ from awx.main.utils.encryption import decrypt_value, get_encryption_key
 from awx.api.versioning import reverse, drf_reverse
 from awx.main.models.oauth import (OAuth2Application as Application, 
                                    OAuth2AccessToken as AccessToken)
+from awx.main.tests.functional import immediate_on_commit
 from awx.sso.models import UserEnterpriseAuth
 from oauth2_provider.models import RefreshToken
 
@@ -52,6 +55,41 @@ def test_token_creation_disabled_for_external_accounts(oauth_application, post, 
         else:
             assert 'OAuth2 Tokens cannot be created by users associated with an external authentication provider' in smart_str(resp.content)  # noqa
             assert AccessToken.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_existing_token_enabled_for_external_accounts(oauth_application, get, post, admin):
+    UserEnterpriseAuth(user=admin, provider='radius').save()
+    url = drf_reverse('api:oauth_authorization_root_view') + 'token/'
+    with override_settings(RADIUS_SERVER='example.org', ALLOW_OAUTH2_FOR_EXTERNAL_USERS=True):
+        resp = post(
+            url,
+            data='grant_type=password&username=admin&password=admin&scope=read',
+            content_type='application/x-www-form-urlencoded',
+            HTTP_AUTHORIZATION='Basic ' + smart_str(base64.b64encode(smart_bytes(':'.join([
+                oauth_application.client_id, oauth_application.client_secret
+            ])))),
+            status=201
+        )
+        token = json.loads(resp.content)['access_token']
+        assert AccessToken.objects.count() == 1
+
+        with immediate_on_commit():
+            resp = get(
+                drf_reverse('api:user_me_list', kwargs={'version': 'v2'}),
+                HTTP_AUTHORIZATION='Bearer ' + token,
+                status=200
+            )
+            assert json.loads(resp.content)['results'][0]['username'] == 'admin'
+
+    with override_settings(RADIUS_SERVER='example.org', ALLOW_OAUTH2_FOR_EXTERNAL_USER=False):
+        with immediate_on_commit():
+            resp = get(
+                drf_reverse('api:user_me_list', kwargs={'version': 'v2'}),
+                HTTP_AUTHORIZATION='Bearer ' + token,
+                status=200
+            )
+            assert json.loads(resp.content)['results'][0]['username'] == 'admin'
 
 
 @pytest.mark.django_db
@@ -288,6 +326,38 @@ def test_refresh_accesstoken(oauth_application, post, get, delete, admin):
     # checks that RefreshTokens are rotated (new RefreshToken issued)
     assert RefreshToken.objects.filter(token=new_refresh_token).count() == 1
     assert original_refresh_token.revoked # is not None
+
+
+@pytest.mark.django_db
+def test_refresh_token_expiration_is_respected(oauth_application, post, get, delete, admin):
+    response = post(
+        reverse('api:o_auth2_application_token_list', kwargs={'pk': oauth_application.pk}),
+        {'scope': 'read'}, admin, expect=201
+    )
+    assert AccessToken.objects.count() == 1
+    assert RefreshToken.objects.count() == 1
+    refresh_token = RefreshToken.objects.get(token=response.data['refresh_token'])
+    refresh_url = drf_reverse('api:oauth_authorization_root_view') + 'token/'
+    short_lived = {
+        'ACCESS_TOKEN_EXPIRE_SECONDS': 1,
+        'AUTHORIZATION_CODE_EXPIRE_SECONDS': 1,
+        'REFRESH_TOKEN_EXPIRE_SECONDS': 1
+    }
+    time.sleep(1)
+    with override_settings(OAUTH2_PROVIDER=short_lived):
+        response = post(
+            refresh_url,
+            data='grant_type=refresh_token&refresh_token=' + refresh_token.token,
+            content_type='application/x-www-form-urlencoded',
+            HTTP_AUTHORIZATION='Basic ' + smart_str(base64.b64encode(smart_bytes(':'.join([
+                oauth_application.client_id, oauth_application.client_secret
+            ]))))
+        )
+    assert response.status_code == 403
+    assert b'The refresh token has expired.' in response.content
+    assert RefreshToken.objects.filter(token=refresh_token).exists()
+    assert AccessToken.objects.count() == 1
+    assert RefreshToken.objects.count() == 1
 
 
 

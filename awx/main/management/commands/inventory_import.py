@@ -169,7 +169,7 @@ class AnsibleInventoryLoader(object):
             self.tmp_private_dir = build_proot_temp_dir()
             logger.debug("Using fresh temporary directory '{}' for isolation.".format(self.tmp_private_dir))
             kwargs['proot_temp_dir'] = self.tmp_private_dir
-            kwargs['proot_show_paths'] = [functioning_dir(self.source)]
+            kwargs['proot_show_paths'] = [functioning_dir(self.source), settings.AWX_ANSIBLE_COLLECTIONS_PATHS]
         logger.debug("Running from `{}` working directory.".format(cwd))
 
         if self.venv_path != settings.ANSIBLE_VENV_PATH:
@@ -271,7 +271,7 @@ class Command(BaseCommand):
                                      logging.DEBUG, 0]))
         logger.setLevel(log_levels.get(self.verbosity, 0))
 
-    def _get_instance_id(self, from_dict, default=''):
+    def _get_instance_id(self, variables, default=''):
         '''
         Retrieve the instance ID from the given dict of host variables.
 
@@ -279,15 +279,23 @@ class Command(BaseCommand):
         the lookup will traverse into nested dicts, equivalent to:
 
         from_dict.get('foo', {}).get('bar', default)
+
+        Multiple ID variables may be specified as 'foo.bar,foobar', so that
+        it will first try to find 'bar' inside of 'foo', and if unable,
+        will try to find 'foobar' as a fallback
         '''
         instance_id = default
         if getattr(self, 'instance_id_var', None):
-            for key in self.instance_id_var.split('.'):
-                if not hasattr(from_dict, 'get'):
-                    instance_id = default
+            for single_instance_id in self.instance_id_var.split(','):
+                from_dict = variables
+                for key in single_instance_id.split('.'):
+                    if not hasattr(from_dict, 'get'):
+                        instance_id = default
+                        break
+                    instance_id = from_dict.get(key, default)
+                    from_dict = instance_id
+                if instance_id:
                     break
-                instance_id = from_dict.get(key, default)
-                from_dict = instance_id
         return smart_text(instance_id)
 
     def _get_enabled(self, from_dict, default=None):
@@ -422,7 +430,7 @@ class Command(BaseCommand):
             for mem_host in self.all_group.all_hosts.values():
                 instance_id = self._get_instance_id(mem_host.variables)
                 if not instance_id:
-                    logger.warning('Host "%s" has no "%s" variable',
+                    logger.warning('Host "%s" has no "%s" variable(s)',
                                    mem_host.name, self.instance_id_var)
                     continue
                 mem_host.instance_id = instance_id
@@ -496,12 +504,6 @@ class Command(BaseCommand):
             group_names = all_group_names[offset:(offset + self._batch_size)]
             for group_pk in groups_qs.filter(name__in=group_names).values_list('pk', flat=True):
                 del_group_pks.discard(group_pk)
-        if self.inventory_source.deprecated_group_id in del_group_pks:  # TODO: remove in 3.3
-            logger.warning(
-                'Group "%s" from v1 API is not deleted by overwrite',
-                self.inventory_source.deprecated_group.name
-            )
-            del_group_pks.discard(self.inventory_source.deprecated_group_id)
         # Now delete all remaining groups in batches.
         all_del_pks = sorted(list(del_group_pks))
         for offset in range(0, len(all_del_pks), self._batch_size):
@@ -534,12 +536,6 @@ class Command(BaseCommand):
         # Set of all host pks managed by this inventory source
         all_source_host_pks = self._existing_host_pks()
         for db_group in db_groups.all():
-            if self.inventory_source.deprecated_group_id == db_group.id:  # TODO: remove in 3.3
-                logger.debug(
-                    'Group "%s" from v1 API child group/host connections preserved',
-                    db_group.name
-                )
-                continue
             # Delete child group relationships not present in imported data.
             db_children = db_group.children
             db_children_name_pk_map = dict(db_children.values_list('name', 'pk'))
@@ -661,11 +657,12 @@ class Command(BaseCommand):
             if group_name in existing_group_names:
                 continue
             mem_group = self.all_group.all_groups[group_name]
+            group_desc = mem_group.variables.pop('_awx_description', 'imported')
             group = self.inventory.groups.update_or_create(
                 name=group_name,
                 defaults={
                     'variables':json.dumps(mem_group.variables),
-                    'description':'imported'
+                    'description':group_desc
                 }
             )[0]
             logger.debug('Group "%s" added', group.name)
@@ -788,8 +785,9 @@ class Command(BaseCommand):
         # Create any new hosts.
         for mem_host_name in sorted(mem_host_names_to_update):
             mem_host = self.all_group.all_hosts[mem_host_name]
-            host_attrs = dict(variables=json.dumps(mem_host.variables),
-                              description='imported')
+            import_vars = mem_host.variables
+            host_desc = import_vars.pop('_awx_description', 'imported')
+            host_attrs = dict(variables=json.dumps(import_vars), description=host_desc)
             enabled = self._get_enabled(mem_host.variables)
             if enabled is not None:
                 host_attrs['enabled'] = enabled
@@ -921,11 +919,14 @@ class Command(BaseCommand):
         available_instances = license_info.get('available_instances', 0)
         free_instances = license_info.get('free_instances', 0)
         time_remaining = license_info.get('time_remaining', 0)
+        hard_error = license_info.get('trial', False) is True or license_info['instance_count'] == 10
         new_count = Host.objects.active_count()
-        if time_remaining <= 0 and not license_info.get('demo', False):
-            logger.error(LICENSE_EXPIRED_MESSAGE)
-            if license_info.get('trial', False) is True:
+        if time_remaining <= 0:
+            if hard_error:
+                logger.error(LICENSE_EXPIRED_MESSAGE)
                 raise CommandError("License has expired!")
+            else:
+                logger.warning(LICENSE_EXPIRED_MESSAGE)
         # special check for tower-type inventory sources
         # but only if running the plugin
         TOWER_SOURCE_FILES = ['tower.yml', 'tower.yaml']
@@ -938,15 +939,11 @@ class Command(BaseCommand):
                 'new_count': new_count,
                 'available_instances': available_instances,
             }
-            if license_info.get('demo', False):
-                logger.error(DEMO_LICENSE_MESSAGE % d)
-            else:
+            if hard_error:
                 logger.error(LICENSE_MESSAGE % d)
-            if (
-                license_info.get('trial', False) is True or
-                license_info['instance_count'] == 10  # basic 10 license
-            ):
                 raise CommandError('License count exceeded!')
+            else:
+                logger.warning(LICENSE_MESSAGE % d)
 
     def check_org_host_limit(self):
         license_info = get_licenser().validate()
@@ -1006,12 +1003,6 @@ class Command(BaseCommand):
             self.host_filter_re = re.compile(self.host_filter)
         except re.error:
             raise CommandError('invalid regular expression for --host-filter')
-
-        '''
-        TODO: Remove this deprecation when we remove support for rax.py
-        '''
-        if self.source == "rax.py":
-            logger.info("Rackspace inventory sync is Deprecated in Tower 3.1.0 and support for Rackspace will be removed in a future release.")
 
         begin = time.time()
         self.load_inventory_from_database()
@@ -1097,7 +1088,7 @@ class Command(BaseCommand):
                             if settings.SQL_DEBUG:
                                 logger.warning('update computed fields took %d queries',
                                                len(connection.queries) - queries_before2)
-                        # Check if the license is valid. 
+                        # Check if the license is valid.
                         # If the license is not valid, a CommandError will be thrown,
                         # and inventory update will be marked as invalid.
                         # with transaction.atomic() will roll back the changes.

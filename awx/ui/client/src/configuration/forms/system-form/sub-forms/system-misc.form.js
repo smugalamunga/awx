@@ -40,6 +40,10 @@ export default ['i18n', function(i18n) {
             ALLOW_OAUTH2_FOR_EXTERNAL_USERS: {
                 type: 'toggleSwitch',
             },
+            LOGIN_REDIRECT_OVERRIDE: {
+                type: 'text',
+                reset: 'LOGIN_REDIRECT_OVERRIDE'
+            },
             ACCESS_TOKEN_EXPIRE_SECONDS: {
                 type: 'text',
                 reset: 'ACCESS_TOKEN_EXPIRE_SECONDS'
@@ -75,6 +79,12 @@ export default ['i18n', function(i18n) {
             AUTOMATION_ANALYTICS_URL: {
                 type: 'text',
                 reset: 'AUTOMATION_ANALYTICS_URL',
+            },
+            AUTOMATION_ANALYTICS_GATHER_INTERVAL: {
+                type: 'number',
+                integer: true,
+                min: 1800,
+                reset: 'AUTOMATION_ANALYTICS_GATHER_INTERVAL',
             }
         },
 

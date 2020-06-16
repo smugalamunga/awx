@@ -58,6 +58,10 @@ export default ['i18n', function(i18n) {
                 type: 'text',
                 reset: 'ANSIBLE_FACT_CACHE_TIMEOUT',
             },
+            MAX_FORKS: {
+                type: 'text',
+                reset: 'MAX_FORKS',
+            },
             PROJECT_UPDATE_VVV: {
                 type: 'toggleSwitch',
             },
@@ -65,6 +69,9 @@ export default ['i18n', function(i18n) {
                 type: 'toggleSwitch',
             },
             AWX_COLLECTIONS_ENABLED: {
+                type: 'toggleSwitch',
+            },
+            AWX_SHOW_PLAYBOOK_LINKS: {
                 type: 'toggleSwitch',
             },
             PRIMARY_GALAXY_URL: {

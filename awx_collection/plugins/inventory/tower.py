@@ -12,7 +12,6 @@ DOCUMENTATION = '''
       - Matthew Jones (@matburt)
       - Yunfan Zhang (@YunfanZhang42)
     short_description: Ansible dynamic inventory plugin for Ansible Tower.
-    version_added: "2.7"
     description:
         - Reads inventories from Ansible Tower.
         - Supports reading configuration from both YAML config file and environment variables.
@@ -21,31 +20,23 @@ DOCUMENTATION = '''
           are missing, this plugin will try to fill in missing arguments by reading from environment variables.
         - If reading configurations from environment variables, the path in the command must be @tower_inventory.
     options:
-        plugin:
-            description: the name of this plugin, it should always be set to 'tower'
-                for this plugin to recognize it as it's own.
-            env:
-                - name: ANSIBLE_INVENTORY_ENABLED
-            required: True
-            choices: ['tower']
         host:
             description: The network address of your Ansible Tower host.
-            type: string
             env:
                 - name: TOWER_HOST
-            required: True
         username:
             description: The user that you plan to use to access inventories on Ansible Tower.
-            type: string
             env:
                 - name: TOWER_USERNAME
-            required: True
         password:
             description: The password for your Ansible Tower user.
-            type: string
             env:
                 - name: TOWER_PASSWORD
-            required: True
+        oauth_token:
+            description:
+                - The Tower OAuth token to use.
+            env:
+                - name: TOWER_OAUTH_TOKEN
         inventory_id:
             description:
                 - The ID of the Ansible Tower inventory that you wish to import.
@@ -56,19 +47,18 @@ DOCUMENTATION = '''
             env:
                 - name: TOWER_INVENTORY
             required: True
-        validate_certs:
-            description: Specify whether Ansible should verify the SSL certificate of Ansible Tower host.
+        verify_ssl:
+            description:
+                - Specify whether Ansible should verify the SSL certificate of Ansible Tower host.
+                - Defaults to True, but this is handled by the shared module_utils code
             type: bool
-            default: True
             env:
                 - name: TOWER_VERIFY_SSL
-            required: False
-            aliases: [ verify_ssl ]
+            aliases: [ validate_certs ]
         include_metadata:
             description: Make extra requests to provide all group vars with metadata about the source Ansible Tower host.
             type: bool
             default: False
-            version_added: "2.8"
 '''
 
 EXAMPLES = '''
@@ -98,21 +88,19 @@ inventory_id: the_ID_of_targeted_ansible_tower_inventory
 # ansible-inventory -i @tower_inventory --list
 '''
 
-import re
 import os
-import json
+
 from ansible.module_utils import six
-from ansible.module_utils.urls import Request, urllib_error, ConnectionError, socket, httplib
 from ansible.module_utils._text import to_text, to_native
 from ansible.errors import AnsibleParserError, AnsibleOptionsError
 from ansible.plugins.inventory import BaseInventoryPlugin
 from ansible.config.manager import ensure_type
 
-# Python 2/3 Compatibility
-try:
-    from urlparse import urljoin
-except ImportError:
-    from urllib.parse import urljoin
+from ..module_utils.tower_api import TowerModule
+
+
+def handle_error(**kwargs):
+    raise AnsibleParserError(to_native(kwargs.get('msg')))
 
 
 class InventoryModule(BaseInventoryPlugin):
@@ -120,25 +108,6 @@ class InventoryModule(BaseInventoryPlugin):
     # Stays backward compatible with tower inventory script.
     # If the user supplies '@tower_inventory' as path, the plugin will read from environment variables.
     no_config_file_supplied = False
-
-    def make_request(self, request_handler, tower_url):
-        """Makes the request to given URL, handles errors, returns JSON
-        """
-        try:
-            response = request_handler.get(tower_url)
-        except (ConnectionError, urllib_error.URLError, socket.error, httplib.HTTPException) as e:
-            n_error_msg = 'Connection to remote host failed: {err}'.format(err=to_native(e))
-            # If Tower gives a readable error message, display that message to the user.
-            if callable(getattr(e, 'read', None)):
-                n_error_msg += ' with message: {err_msg}'.format(err_msg=to_native(e.read()))
-            raise AnsibleParserError(n_error_msg)
-
-        # Attempt to parse JSON.
-        try:
-            return json.loads(response.read())
-        except (ValueError, TypeError) as e:
-            # If the JSON parse fails, print the ValueError
-            raise AnsibleParserError('Failed to parse json from host: {err}'.format(err=to_native(e)))
 
     def verify_file(self, path):
         if path.endswith('@tower_inventory'):
@@ -149,20 +118,25 @@ class InventoryModule(BaseInventoryPlugin):
         else:
             return False
 
+    def warn_callback(self, warning):
+        self.display.warning(warning)
+
     def parse(self, inventory, loader, path, cache=True):
         super(InventoryModule, self).parse(inventory, loader, path)
         if not self.no_config_file_supplied and os.path.isfile(path):
             self._read_config_data(path)
-        # Read inventory from tower server.
-        # Note the environment variables will be handled automatically by InventoryManager.
-        tower_host = self.get_option('host')
-        if not re.match('(?:http|https)://', tower_host):
-            tower_host = 'https://{tower_host}'.format(tower_host=tower_host)
 
-        request_handler = Request(url_username=self.get_option('username'),
-                                  url_password=self.get_option('password'),
-                                  force_basic_auth=True,
-                                  validate_certs=self.get_option('validate_certs'))
+        # Defer processing of params to logic shared with the modules
+        module_params = {}
+        for plugin_param, module_param in TowerModule.short_params.items():
+            opt_val = self.get_option(plugin_param)
+            if opt_val is not None:
+                module_params[module_param] = opt_val
+
+        module = TowerModule(
+            argument_spec={}, direct_params=module_params,
+            error_callback=handle_error, warn_callback=self.warn_callback
+        )
 
         # validate type of inventory_id because we allow two types as special case
         inventory_id = self.get_option('inventory_id')
@@ -177,10 +151,12 @@ class InventoryModule(BaseInventoryPlugin):
                     'not integer, and cannot convert to string: {err}'.format(err=to_native(e))
                 )
         inventory_id = inventory_id.replace('/', '')
-        inventory_url = '/api/v2/inventories/{inv_id}/script/?hostvars=1&towervars=1&all=1'.format(inv_id=inventory_id)
-        inventory_url = urljoin(tower_host, inventory_url)
+        inventory_url = '/api/v2/inventories/{inv_id}/script/'.format(inv_id=inventory_id)
 
-        inventory = self.make_request(request_handler, inventory_url)
+        inventory = module.get_endpoint(
+            inventory_url, data={'hostvars': '1', 'towervars': '1', 'all': '1'}
+        )['json']
+
         # To start with, create all the groups.
         for group_name in inventory:
             if group_name != '_meta':
@@ -209,8 +185,9 @@ class InventoryModule(BaseInventoryPlugin):
 
         # Fetch extra variables if told to do so
         if self.get_option('include_metadata'):
-            config_url = urljoin(tower_host, '/api/v2/config/')
-            config_data = self.make_request(request_handler, config_url)
+
+            config_data = module.get_endpoint('/api/v2/config/')['json']
+
             server_data = {}
             server_data['license_type'] = config_data.get('license_info', {}).get('license_type', 'unknown')
             for key in ('version', 'ansible_version'):

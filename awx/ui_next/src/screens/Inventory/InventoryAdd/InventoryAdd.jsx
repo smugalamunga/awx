@@ -1,26 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { withI18n } from '@lingui/react';
-import { withRouter } from 'react-router-dom';
-import { t } from '@lingui/macro';
-import {
-  PageSection,
-  Card,
-  CardHeader,
-  CardBody,
-  Tooltip,
-} from '@patternfly/react-core';
+import { useHistory } from 'react-router-dom';
+import { PageSection, Card } from '@patternfly/react-core';
+import { CardBody } from '../../../components/Card';
+import ContentLoading from '../../../components/ContentLoading';
 
-import ContentError from '@components/ContentError';
-import ContentLoading from '@components/ContentLoading';
-
-import CardCloseButton from '@components/CardCloseButton';
-import { InventoriesAPI, CredentialTypesAPI } from '@api';
+import { InventoriesAPI, CredentialTypesAPI } from '../../../api';
 import InventoryForm from '../shared/InventoryForm';
 
-function InventoryAdd({ history, i18n }) {
+function InventoryAdd() {
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [credentialTypeId, setCredentialTypeId] = useState(null);
+  const history = useHistory();
 
   useEffect(() => {
     const loadData = async () => {
@@ -54,7 +45,9 @@ function InventoryAdd({ history, i18n }) {
         data: { id: inventoryId },
       } = await InventoriesAPI.create({
         organization: organization.id,
-        insights_credential: insights_credential.id,
+        insights_credential: insights_credential
+          ? insights_credential.id
+          : null,
         ...remainingValues,
       });
       if (instanceGroups) {
@@ -63,7 +56,9 @@ function InventoryAdd({ history, i18n }) {
         );
         await Promise.all(associatePromises);
       }
-      const url = history.location.pathname.search('smart')
+      const url = history.location.pathname.startsWith(
+        '/inventories/smart_inventory'
+      )
         ? `/inventories/smart_inventory/${inventoryId}/details`
         : `/inventories/inventory/${inventoryId}/details`;
 
@@ -73,32 +68,18 @@ function InventoryAdd({ history, i18n }) {
     }
   };
 
-  if (error) {
-    return <ContentError />;
-  }
   if (isLoading) {
     return <ContentLoading />;
   }
   return (
     <PageSection>
       <Card>
-        <CardHeader
-          style={{
-            paddingRight: '10px',
-            paddingTop: '10px',
-            paddingBottom: '0',
-            textAlign: 'right',
-          }}
-        >
-          <Tooltip content={i18n._(t`Close`)} position="top">
-            <CardCloseButton onClick={handleCancel} />
-          </Tooltip>
-        </CardHeader>
         <CardBody>
           <InventoryForm
             onCancel={handleCancel}
             onSubmit={handleSubmit}
             credentialTypeId={credentialTypeId}
+            submitError={error}
           />
         </CardBody>
       </Card>
@@ -107,4 +88,4 @@ function InventoryAdd({ history, i18n }) {
 }
 
 export { InventoryAdd as _InventoryAdd };
-export default withI18n()(withRouter(InventoryAdd));
+export default InventoryAdd;

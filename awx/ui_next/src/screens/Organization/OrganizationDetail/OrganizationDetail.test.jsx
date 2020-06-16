@@ -1,11 +1,15 @@
 import React from 'react';
+import { act } from 'react-dom/test-utils';
 
-import { OrganizationsAPI } from '@api';
-import { mountWithContexts, waitForElement } from '@testUtils/enzymeHelpers';
+import { OrganizationsAPI } from '../../../api';
+import {
+  mountWithContexts,
+  waitForElement,
+} from '../../../../testUtils/enzymeHelpers';
 
 import OrganizationDetail from './OrganizationDetail';
 
-jest.mock('@api');
+jest.mock('../../../api');
 
 describe('<OrganizationDetail />', () => {
   const mockOrganization = {
@@ -18,12 +22,16 @@ describe('<OrganizationDetail />', () => {
     summary_fields: {
       user_capabilities: {
         edit: true,
+        delete: true,
       },
     },
   };
   const mockInstanceGroups = {
     data: {
-      results: [{ name: 'One', id: 1 }, { name: 'Two', id: 2 }],
+      results: [
+        { name: 'One', id: 1 },
+        { name: 'Two', id: 2 },
+      ],
     },
   };
 
@@ -35,30 +43,42 @@ describe('<OrganizationDetail />', () => {
     jest.clearAllMocks();
   });
 
-  test('initially renders succesfully', () => {
-    mountWithContexts(<OrganizationDetail organization={mockOrganization} />);
+  test('initially renders succesfully', async () => {
+    await act(async () => {
+      mountWithContexts(<OrganizationDetail organization={mockOrganization} />);
+    });
   });
 
-  test('should request instance groups from api', () => {
-    mountWithContexts(<OrganizationDetail organization={mockOrganization} />);
+  test('should request instance groups from api', async () => {
+    await act(async () => {
+      mountWithContexts(<OrganizationDetail organization={mockOrganization} />);
+    });
     expect(OrganizationsAPI.readInstanceGroups).toHaveBeenCalledTimes(1);
   });
 
-  test('should handle setting instance groups to state', async done => {
-    const wrapper = mountWithContexts(
-      <OrganizationDetail organization={mockOrganization} />
-    );
-    const component = await waitForElement(wrapper, 'OrganizationDetail');
-    expect(component.state().instanceGroups).toEqual(
-      mockInstanceGroups.data.results
-    );
-    done();
+  test('should render the expected instance group', async () => {
+    let component;
+    await act(async () => {
+      component = mountWithContexts(
+        <OrganizationDetail organization={mockOrganization} />
+      );
+    });
+    await waitForElement(component, 'ContentLoading', el => el.length === 0);
+    expect(
+      component
+        .find('Chip')
+        .findWhere(el => el.text() === 'One')
+        .exists()
+    ).toBe(true);
   });
 
-  test('should render Details', async done => {
-    const wrapper = mountWithContexts(
-      <OrganizationDetail organization={mockOrganization} />
-    );
+  test('should render Details', async () => {
+    let wrapper;
+    await act(async () => {
+      wrapper = mountWithContexts(
+        <OrganizationDetail organization={mockOrganization} />
+      );
+    });
     const testParams = [
       { label: 'Name', value: 'Foo' },
       { label: 'Description', value: 'Bar' },
@@ -67,37 +87,109 @@ describe('<OrganizationDetail />', () => {
       { label: 'Last Modified', value: '8/11/2019, 7:47:37 PM' },
       { label: 'Max Hosts', value: '0' },
     ];
-    // eslint-disable-next-line no-restricted-syntax
-    for (const { label, value } of testParams) {
+    for (let i = 0; i < testParams.length; i++) {
+      const { label, value } = testParams[i];
       // eslint-disable-next-line no-await-in-loop
       const detail = await waitForElement(wrapper, `Detail[label="${label}"]`);
       expect(detail.find('dt').text()).toBe(label);
       expect(detail.find('dd').text()).toBe(value);
     }
-    done();
   });
 
-  test('should show edit button for users with edit permission', async done => {
-    const wrapper = mountWithContexts(
-      <OrganizationDetail organization={mockOrganization} />
-    );
+  test('should show edit button for users with edit permission', async () => {
+    let wrapper;
+    await act(async () => {
+      wrapper = mountWithContexts(
+        <OrganizationDetail organization={mockOrganization} />
+      );
+    });
     const editButton = await waitForElement(
       wrapper,
-      'OrganizationDetail Button'
+      'OrganizationDetail Button[aria-label="Edit"]'
     );
     expect(editButton.text()).toEqual('Edit');
     expect(editButton.prop('to')).toBe('/organizations/undefined/edit');
-    done();
   });
 
-  test('should hide edit button for users without edit permission', async done => {
+  test('should hide edit button for users without edit permission', async () => {
     const readOnlyOrg = { ...mockOrganization };
     readOnlyOrg.summary_fields.user_capabilities.edit = false;
-    const wrapper = mountWithContexts(
-      <OrganizationDetail organization={readOnlyOrg} />
-    );
+
+    let wrapper;
+    await act(async () => {
+      wrapper = mountWithContexts(
+        <OrganizationDetail organization={readOnlyOrg} />
+      );
+    });
     await waitForElement(wrapper, 'OrganizationDetail');
-    expect(wrapper.find('OrganizationDetail Button').length).toBe(0);
-    done();
+    expect(
+      wrapper.find('OrganizationDetail Button[aria-label="Edit"]').length
+    ).toBe(0);
+  });
+
+  test('expected api calls are made for delete', async () => {
+    OrganizationsAPI.readInstanceGroups.mockResolvedValue({ data: {} });
+
+    let wrapper;
+    await act(async () => {
+      wrapper = mountWithContexts(
+        <OrganizationDetail organization={mockOrganization} />
+      );
+    });
+    await waitForElement(
+      wrapper,
+      'OrganizationDetail Button[aria-label="Delete"]'
+    );
+    await act(async () => {
+      wrapper.find('DeleteButton').invoke('onConfirm')();
+    });
+    expect(OrganizationsAPI.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  test('should show content error for failed instance group fetch', async () => {
+    OrganizationsAPI.readInstanceGroups.mockImplementationOnce(() =>
+      Promise.reject(new Error())
+    );
+
+    let wrapper;
+    await act(async () => {
+      wrapper = mountWithContexts(
+        <OrganizationDetail organization={mockOrganization} />
+      );
+    });
+    await waitForElement(wrapper, 'ContentError', el => el.length === 1);
+  });
+
+  test('Error dialog shown for failed deletion', async () => {
+    OrganizationsAPI.destroy.mockImplementationOnce(() =>
+      Promise.reject(new Error())
+    );
+
+    let wrapper;
+    await act(async () => {
+      wrapper = mountWithContexts(
+        <OrganizationDetail organization={mockOrganization} />
+      );
+    });
+    await waitForElement(
+      wrapper,
+      'OrganizationDetail Button[aria-label="Delete"]'
+    );
+    await act(async () => {
+      wrapper.find('DeleteButton').invoke('onConfirm')();
+    });
+    await waitForElement(
+      wrapper,
+      'Modal[title="Error!"]',
+      el => el.length === 1
+    );
+    await act(async () => {
+      wrapper.find('Modal[title="Error!"]').invoke('onClose')();
+    });
+    await waitForElement(
+      wrapper,
+      'Modal[title="Error!"]',
+      el => el.length === 0
+    );
   });
 });
